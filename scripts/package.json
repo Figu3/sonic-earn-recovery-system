@@ -1,0 +1,17 @@
+{
+  "name": "trevee-stream-recovery-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "snapshot": "npx tsx scripts/snapshot.ts",
+    "merkle": "npx tsx scripts/merkle.ts"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

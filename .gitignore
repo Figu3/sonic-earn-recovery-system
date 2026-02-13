@@ -1,0 +1,16 @@
+# Compiler output
+cache/
+out/
+
+# Node
+scripts/node_modules/
+
+# Snapshot output (contains sensitive holder data)
+scripts/output/
+
+# OS
+.DS_Store
+
+# Env
+.env
+.env.*
