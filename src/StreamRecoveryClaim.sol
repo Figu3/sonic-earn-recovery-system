@@ -10,10 +10,10 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 /// @title StreamRecoveryClaim
 /// @notice Distributes recovered assets from the Stream Trading incident to affected
 ///         stkscUSD and stkscETH users on a pro-rata basis via Merkle proofs.
-/// @dev Uses share-based Merkle leaves: each user's leaf encodes their proportional
-///      share (in WAD = 1e18) of the stkscUSD and stkscETH pools. The same Merkle
-///      root is reused across all distribution rounds; actual payouts are computed
-///      on-chain as `share * roundTotal / WAD`.
+/// @dev Uses TWO separate Merkle trees per round — one for USDC shares and one for WETH
+///      shares. Each leaf encodes: keccak256(bytes.concat(keccak256(abi.encode(address, shareWad)))).
+///      This allows ~85% of users (USDC-only) to claim without touching the WETH tree,
+///      and enables independent distribution rounds per token.
 ///      Users must sign an EIP-712 waiver before claiming.
 contract StreamRecoveryClaim is EIP712 {
     using SafeERC20 for IERC20;
@@ -42,7 +42,8 @@ contract StreamRecoveryClaim is EIP712 {
     uint256 public roundCount;
 
     struct Round {
-        bytes32 merkleRoot;
+        bytes32 usdcMerkleRoot;  // Merkle root for USDC share tree
+        bytes32 wethMerkleRoot;  // Merkle root for WETH share tree
         uint256 usdcTotal;       // Total USDC allocated to this round
         uint256 wethTotal;       // Total WETH allocated to this round
         uint256 usdcClaimed;     // USDC already claimed
@@ -54,8 +55,11 @@ contract StreamRecoveryClaim is EIP712 {
     /// @notice roundId => Round data
     mapping(uint256 => Round) public rounds;
 
-    /// @notice roundId => user => claimed
-    mapping(uint256 => mapping(address => bool)) public hasClaimed;
+    /// @notice roundId => user => has claimed USDC
+    mapping(uint256 => mapping(address => bool)) public hasClaimedUsdc;
+
+    /// @notice roundId => user => has claimed WETH
+    mapping(uint256 => mapping(address => bool)) public hasClaimedWeth;
 
     /// @notice user => has signed the waiver
     mapping(address => bool) public hasSignedWaiver;
@@ -63,8 +67,15 @@ contract StreamRecoveryClaim is EIP712 {
     bool public paused;
 
     // ─── Events ─────────────────────────────────────────────────────────
-    event RoundCreated(uint256 indexed roundId, bytes32 merkleRoot, uint256 usdcTotal, uint256 wethTotal);
-    event Claimed(uint256 indexed roundId, address indexed user, uint256 usdcAmount, uint256 wethAmount);
+    event RoundCreated(
+        uint256 indexed roundId,
+        bytes32 usdcMerkleRoot,
+        bytes32 wethMerkleRoot,
+        uint256 usdcTotal,
+        uint256 wethTotal
+    );
+    event UsdcClaimed(uint256 indexed roundId, address indexed user, uint256 amount);
+    event WethClaimed(uint256 indexed roundId, address indexed user, uint256 amount);
     event WaiverSigned(address indexed user);
     event RoundDeactivated(uint256 indexed roundId);
     event UnclaimedSwept(uint256 indexed roundId, uint256 usdcAmount, uint256 wethAmount);
@@ -114,18 +125,21 @@ contract StreamRecoveryClaim is EIP712 {
     // ─── Admin: Round Management ────────────────────────────────────────
 
     /// @notice Create a new distribution round. Tokens must already be in the contract.
-    /// @param merkleRoot The Merkle root encoding per-user shares (WAD-based).
+    /// @param usdcMerkleRoot The Merkle root for the USDC share tree.
+    /// @param wethMerkleRoot The Merkle root for the WETH share tree.
     /// @param usdcTotal Total USDC allocated to this round.
     /// @param wethTotal Total WETH allocated to this round.
     function createRound(
-        bytes32 merkleRoot,
+        bytes32 usdcMerkleRoot,
+        bytes32 wethMerkleRoot,
         uint256 usdcTotal,
         uint256 wethTotal
     ) external onlyAdmin {
         uint256 roundId = roundCount++;
 
         rounds[roundId] = Round({
-            merkleRoot: merkleRoot,
+            usdcMerkleRoot: usdcMerkleRoot,
+            wethMerkleRoot: wethMerkleRoot,
             usdcTotal: usdcTotal,
             wethTotal: wethTotal,
             usdcClaimed: 0,
@@ -134,7 +148,7 @@ contract StreamRecoveryClaim is EIP712 {
             active: true
         });
 
-        emit RoundCreated(roundId, merkleRoot, usdcTotal, wethTotal);
+        emit RoundCreated(roundId, usdcMerkleRoot, wethMerkleRoot, usdcTotal, wethTotal);
     }
 
     /// @notice Deactivate a round (emergency only).
@@ -168,76 +182,137 @@ contract StreamRecoveryClaim is EIP712 {
 
     // ─── User: Claim ────────────────────────────────────────────────────
 
-    /// @notice Claim recovered assets for a single round.
+    /// @notice Claim USDC from a single round.
     /// @param roundId The round to claim from.
-    /// @param usdcShareWad User's pro-rata share of the USDC pool (in WAD).
-    /// @param wethShareWad User's pro-rata share of the WETH pool (in WAD).
-    /// @param proof Merkle proof.
-    function claim(
+    /// @param shareWad User's pro-rata share of the USDC pool (in WAD).
+    /// @param proof Merkle proof against the USDC tree.
+    function claimUsdc(
         uint256 roundId,
-        uint256 usdcShareWad,
-        uint256 wethShareWad,
+        uint256 shareWad,
         bytes32[] calldata proof
     ) external whenNotPaused {
-        _claim(roundId, usdcShareWad, wethShareWad, proof);
+        _claimUsdc(roundId, shareWad, proof);
     }
 
-    /// @notice Claim from multiple rounds in a single transaction.
-    /// @dev All rounds use the same shares and proof since the Merkle root is share-based.
-    /// @param roundIds Array of round IDs.
-    /// @param usdcShareWad User's pro-rata share of the USDC pool (in WAD).
-    /// @param wethShareWad User's pro-rata share of the WETH pool (in WAD).
-    /// @param proof Merkle proof (same for all rounds if same Merkle root).
-    function claimMultiple(
-        uint256[] calldata roundIds,
+    /// @notice Claim WETH from a single round.
+    /// @param roundId The round to claim from.
+    /// @param shareWad User's pro-rata share of the WETH pool (in WAD).
+    /// @param proof Merkle proof against the WETH tree.
+    function claimWeth(
+        uint256 roundId,
+        uint256 shareWad,
+        bytes32[] calldata proof
+    ) external whenNotPaused {
+        _claimWeth(roundId, shareWad, proof);
+    }
+
+    /// @notice Convenience: claim both USDC and WETH from a single round.
+    /// @param roundId The round to claim from.
+    /// @param usdcShareWad User's USDC share (WAD).
+    /// @param usdcProof Merkle proof for USDC tree.
+    /// @param wethShareWad User's WETH share (WAD).
+    /// @param wethProof Merkle proof for WETH tree.
+    function claimBoth(
+        uint256 roundId,
         uint256 usdcShareWad,
+        bytes32[] calldata usdcProof,
         uint256 wethShareWad,
+        bytes32[] calldata wethProof
+    ) external whenNotPaused {
+        _claimUsdc(roundId, usdcShareWad, usdcProof);
+        _claimWeth(roundId, wethShareWad, wethProof);
+    }
+
+    /// @notice Claim USDC from multiple rounds in a single transaction.
+    /// @param roundIds Array of round IDs.
+    /// @param shareWad User's USDC share (WAD) — same for all rounds with same root.
+    /// @param proof Merkle proof for the USDC tree.
+    function claimMultipleUsdc(
+        uint256[] calldata roundIds,
+        uint256 shareWad,
         bytes32[] calldata proof
     ) external whenNotPaused {
         uint256 len = roundIds.length;
         for (uint256 i; i < len; ++i) {
-            _claim(roundIds[i], usdcShareWad, wethShareWad, proof);
+            _claimUsdc(roundIds[i], shareWad, proof);
         }
     }
 
-    function _claim(
+    /// @notice Claim WETH from multiple rounds in a single transaction.
+    /// @param roundIds Array of round IDs.
+    /// @param shareWad User's WETH share (WAD) — same for all rounds with same root.
+    /// @param proof Merkle proof for the WETH tree.
+    function claimMultipleWeth(
+        uint256[] calldata roundIds,
+        uint256 shareWad,
+        bytes32[] calldata proof
+    ) external whenNotPaused {
+        uint256 len = roundIds.length;
+        for (uint256 i; i < len; ++i) {
+            _claimWeth(roundIds[i], shareWad, proof);
+        }
+    }
+
+    // ─── Internal Claim Logic ───────────────────────────────────────────
+
+    function _claimUsdc(
         uint256 roundId,
-        uint256 usdcShareWad,
-        uint256 wethShareWad,
+        uint256 shareWad,
         bytes32[] calldata proof
     ) internal {
         if (!hasSignedWaiver[msg.sender]) revert WaiverNotSigned();
 
         Round storage round = rounds[roundId];
         if (!round.active) revert RoundNotActive();
-        if (hasClaimed[roundId][msg.sender]) revert AlreadyClaimed();
+        if (hasClaimedUsdc[roundId][msg.sender]) revert AlreadyClaimed();
 
-        // Verify Merkle proof against share-based leaf
-        bytes32 leaf = keccak256(
-            bytes.concat(
-                keccak256(abi.encode(msg.sender, usdcShareWad, wethShareWad))
-            )
-        );
-        if (!MerkleProof.verify(proof, round.merkleRoot, leaf)) revert InvalidProof();
+        // Verify Merkle proof against USDC tree
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender, shareWad))));
+        if (!MerkleProof.verify(proof, round.usdcMerkleRoot, leaf)) revert InvalidProof();
 
-        // Compute actual payout: share * roundTotal / WAD
-        uint256 usdcAmount = (usdcShareWad * round.usdcTotal) / WAD;
-        uint256 wethAmount = (wethShareWad * round.wethTotal) / WAD;
+        // Compute payout
+        uint256 amount = (shareWad * round.usdcTotal) / WAD;
 
         // Effects
-        hasClaimed[roundId][msg.sender] = true;
-        round.usdcClaimed += usdcAmount;
-        round.wethClaimed += wethAmount;
+        hasClaimedUsdc[roundId][msg.sender] = true;
+        round.usdcClaimed += amount;
 
         // Interactions
-        if (usdcAmount > 0) {
-            usdc.safeTransfer(msg.sender, usdcAmount);
-        }
-        if (wethAmount > 0) {
-            weth.safeTransfer(msg.sender, wethAmount);
+        if (amount > 0) {
+            usdc.safeTransfer(msg.sender, amount);
         }
 
-        emit Claimed(roundId, msg.sender, usdcAmount, wethAmount);
+        emit UsdcClaimed(roundId, msg.sender, amount);
+    }
+
+    function _claimWeth(
+        uint256 roundId,
+        uint256 shareWad,
+        bytes32[] calldata proof
+    ) internal {
+        if (!hasSignedWaiver[msg.sender]) revert WaiverNotSigned();
+
+        Round storage round = rounds[roundId];
+        if (!round.active) revert RoundNotActive();
+        if (hasClaimedWeth[roundId][msg.sender]) revert AlreadyClaimed();
+
+        // Verify Merkle proof against WETH tree
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender, shareWad))));
+        if (!MerkleProof.verify(proof, round.wethMerkleRoot, leaf)) revert InvalidProof();
+
+        // Compute payout
+        uint256 amount = (shareWad * round.wethTotal) / WAD;
+
+        // Effects
+        hasClaimedWeth[roundId][msg.sender] = true;
+        round.wethClaimed += amount;
+
+        // Interactions
+        if (amount > 0) {
+            weth.safeTransfer(msg.sender, amount);
+        }
+
+        emit WethClaimed(roundId, msg.sender, amount);
     }
 
     // ─── Admin: Sweep Unclaimed ─────────────────────────────────────────
@@ -297,28 +372,41 @@ contract StreamRecoveryClaim is EIP712 {
 
     // ─── View ───────────────────────────────────────────────────────────
 
-    /// @notice Check if a user can claim a specific round and preview the payout.
-    function canClaim(
+    /// @notice Check if a user can claim USDC from a specific round.
+    function canClaimUsdc(
         uint256 roundId,
         address user,
-        uint256 usdcShareWad,
-        uint256 wethShareWad,
+        uint256 shareWad,
         bytes32[] calldata proof
-    ) external view returns (bool eligible, uint256 usdcAmount, uint256 wethAmount) {
+    ) external view returns (bool eligible, uint256 amount) {
         Round storage round = rounds[roundId];
-        if (!round.active) return (false, 0, 0);
-        if (hasClaimed[roundId][user]) return (false, 0, 0);
-        if (!hasSignedWaiver[user]) return (false, 0, 0);
+        if (!round.active) return (false, 0);
+        if (hasClaimedUsdc[roundId][user]) return (false, 0);
+        if (!hasSignedWaiver[user]) return (false, 0);
 
-        bytes32 leaf = keccak256(
-            bytes.concat(
-                keccak256(abi.encode(user, usdcShareWad, wethShareWad))
-            )
-        );
-        if (!MerkleProof.verify(proof, round.merkleRoot, leaf)) return (false, 0, 0);
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(user, shareWad))));
+        if (!MerkleProof.verify(proof, round.usdcMerkleRoot, leaf)) return (false, 0);
 
-        usdcAmount = (usdcShareWad * round.usdcTotal) / WAD;
-        wethAmount = (wethShareWad * round.wethTotal) / WAD;
+        amount = (shareWad * round.usdcTotal) / WAD;
+        eligible = true;
+    }
+
+    /// @notice Check if a user can claim WETH from a specific round.
+    function canClaimWeth(
+        uint256 roundId,
+        address user,
+        uint256 shareWad,
+        bytes32[] calldata proof
+    ) external view returns (bool eligible, uint256 amount) {
+        Round storage round = rounds[roundId];
+        if (!round.active) return (false, 0);
+        if (hasClaimedWeth[roundId][user]) return (false, 0);
+        if (!hasSignedWaiver[user]) return (false, 0);
+
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(user, shareWad))));
+        if (!MerkleProof.verify(proof, round.wethMerkleRoot, leaf)) return (false, 0);
+
+        amount = (shareWad * round.wethTotal) / WAD;
         eligible = true;
     }
 

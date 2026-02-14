@@ -1,6 +1,8 @@
 /**
- * Quick test to verify the share-based Merkle tree implementation
- * matches the Solidity contract.
+ * Quick test to verify the single-share Merkle tree implementation
+ * matches the Solidity contract (split-tree design).
+ *
+ * Leaf encoding: keccak256(bytes.concat(keccak256(abi.encode(address, shareWad))))
  */
 
 import {
@@ -17,14 +19,12 @@ const WAD = 10n ** 18n;
 
 function computeLeaf(
   address: `0x${string}`,
-  usdcShareWad: bigint,
-  wethShareWad: bigint
+  shareWad: bigint
 ): `0x${string}` {
   const innerHash = keccak256(
-    encodeAbiParameters(parseAbiParameters("address, uint256, uint256"), [
+    encodeAbiParameters(parseAbiParameters("address, uint256"), [
       address,
-      usdcShareWad,
-      wethShareWad,
+      shareWad,
     ])
   );
   return keccak256(encodePacked(["bytes32"], [innerHash]));
@@ -103,14 +103,13 @@ function assert(condition: boolean, msg: string) {
 }
 
 function runTests() {
-  console.log("🧪 Running share-based Merkle tree tests...\n");
+  console.log("🧪 Running single-share Merkle tree tests (split-tree design)...\n");
 
   // Test 1: Single leaf
   {
     const leaf = computeLeaf(
       "0x0000000000000000000000000000000000000001",
-      WAD, // 100% USDC share
-      WAD  // 100% WETH share
+      WAD // 100% share
     );
     const { root, proofs } = buildMerkleTree([leaf]);
     assert(root === leaf, "Single leaf: root equals leaf");
@@ -120,8 +119,8 @@ function runTests() {
 
   // Test 2: Two leaves with 50/50 split
   {
-    const leaf0 = computeLeaf("0x0000000000000000000000000000000000000001", WAD / 2n, WAD / 2n);
-    const leaf1 = computeLeaf("0x0000000000000000000000000000000000000002", WAD / 2n, WAD / 2n);
+    const leaf0 = computeLeaf("0x0000000000000000000000000000000000000001", WAD / 2n);
+    const leaf1 = computeLeaf("0x0000000000000000000000000000000000000002", WAD / 2n);
     const { root, proofs } = buildMerkleTree([leaf0, leaf1]);
 
     assert(verifyProof(proofs[0], root, leaf0), "Two leaves 50/50: proof[0] verifies");
@@ -131,10 +130,9 @@ function runTests() {
 
   // Test 3: Three leaves with asymmetric shares
   {
-    // 30% USDC / 70% WETH, 50% / 20%, 20% / 10%
-    const leaf0 = computeLeaf("0x0000000000000000000000000000000000000001", 3n * WAD / 10n, 7n * WAD / 10n);
-    const leaf1 = computeLeaf("0x0000000000000000000000000000000000000002", 5n * WAD / 10n, 2n * WAD / 10n);
-    const leaf2 = computeLeaf("0x0000000000000000000000000000000000000003", 2n * WAD / 10n, 1n * WAD / 10n);
+    const leaf0 = computeLeaf("0x0000000000000000000000000000000000000001", 3n * WAD / 10n);
+    const leaf1 = computeLeaf("0x0000000000000000000000000000000000000002", 5n * WAD / 10n);
+    const leaf2 = computeLeaf("0x0000000000000000000000000000000000000003", 2n * WAD / 10n);
     const { root, proofs } = buildMerkleTree([leaf0, leaf1, leaf2]);
 
     assert(verifyProof(proofs[0], root, leaf0), "Three leaves: proof[0] verifies");
@@ -147,8 +145,7 @@ function runTests() {
     const leaves: `0x${string}`[] = [];
     for (let i = 1; i <= 100; i++) {
       const addr = `0x${i.toString(16).padStart(40, "0")}` as `0x${string}`;
-      // Each gets 1% of each pool
-      leaves.push(computeLeaf(addr, WAD / 100n, WAD / 100n));
+      leaves.push(computeLeaf(addr, WAD / 100n));
     }
     const { root, proofs } = buildMerkleTree(leaves);
 
@@ -165,46 +162,53 @@ function runTests() {
   // Test 5: Double-hash leaf encoding matches Solidity
   {
     const addr = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B" as `0x${string}`;
-    const usdcShare = 3n * WAD / 10n; // 30%
-    const wethShare = 7n * WAD / 10n; // 70%
+    const share = 3n * WAD / 10n; // 30%
 
     const abiEncoded = encodeAbiParameters(
-      parseAbiParameters("address, uint256, uint256"),
-      [addr, usdcShare, wethShare]
+      parseAbiParameters("address, uint256"),
+      [addr, share]
     );
     const innerHash = keccak256(abiEncoded);
     const expectedLeaf = keccak256(encodePacked(["bytes32"], [innerHash]));
-    const actualLeaf = computeLeaf(addr, usdcShare, wethShare);
+    const actualLeaf = computeLeaf(addr, share);
     assert(actualLeaf === expectedLeaf, "Double-hash leaf encoding matches Solidity");
   }
 
-  // Test 6: Share-to-payout math simulation
+  // Test 6: Share-to-payout math simulation (USDC tree)
   {
     const user1Share = 3n * WAD / 10n; // 30%
     const user2Share = 7n * WAD / 10n; // 70%
 
-    // Simulate round with 10,000 USDC and 5 WETH
-    const roundUsdcTotal = 10_000n * 10n ** 6n;
-    const roundWethTotal = 5n * 10n ** 18n;
+    // Simulate USDC round with 10,000 USDC
+    const roundTotal = 10_000n * 10n ** 6n;
 
-    const user1Usdc = (user1Share * roundUsdcTotal) / WAD;
-    const user2Usdc = (user2Share * roundUsdcTotal) / WAD;
+    const user1Payout = (user1Share * roundTotal) / WAD;
+    const user2Payout = (user2Share * roundTotal) / WAD;
 
-    const user1Weth = (user1Share * roundWethTotal) / WAD;
-    const user2Weth = (user2Share * roundWethTotal) / WAD;
-
-    assert(user1Usdc === 3000n * 10n ** 6n, "Share math: user1 gets 3000 USDC (30%)");
-    assert(user2Usdc === 7000n * 10n ** 6n, "Share math: user2 gets 7000 USDC (70%)");
-    assert(user1Weth === 15n * 10n ** 17n, "Share math: user1 gets 1.5 WETH (30%)");
-    assert(user2Weth === 35n * 10n ** 17n, "Share math: user2 gets 3.5 WETH (70%)");
+    assert(user1Payout === 3000n * 10n ** 6n, "Share math: user1 gets 3000 USDC (30%)");
+    assert(user2Payout === 7000n * 10n ** 6n, "Share math: user2 gets 7000 USDC (70%)");
 
     // Same shares, different round totals
-    const round2UsdcTotal = 500n * 10n ** 6n;
-    const user1UsdcR2 = (user1Share * round2UsdcTotal) / WAD;
-    assert(user1UsdcR2 === 150n * 10n ** 6n, "Share math round 2: user1 gets 150 USDC (30% of 500)");
+    const round2Total = 500n * 10n ** 6n;
+    const user1PayoutR2 = (user1Share * round2Total) / WAD;
+    assert(user1PayoutR2 === 150n * 10n ** 6n, "Share math round 2: user1 gets 150 USDC (30% of 500)");
   }
 
-  // Test 7: End-to-end with fake snapshot
+  // Test 7: Share-to-payout math simulation (WETH tree)
+  {
+    const user1Share = 4n * WAD / 10n; // 40%
+    const user2Share = 6n * WAD / 10n; // 60%
+
+    const roundTotal = 5n * 10n ** 18n; // 5 WETH
+
+    const user1Payout = (user1Share * roundTotal) / WAD;
+    const user2Payout = (user2Share * roundTotal) / WAD;
+
+    assert(user1Payout === 2n * 10n ** 18n, "WETH math: user1 gets 2 WETH (40%)");
+    assert(user2Payout === 3n * 10n ** 18n, "WETH math: user2 gets 3 WETH (60%)");
+  }
+
+  // Test 8: End-to-end with fake snapshot — two separate trees
   {
     const snapshot = {
       stkscUSD: { totalSupply: "10000000" }, // 10 USDC total
@@ -219,32 +223,121 @@ function runTests() {
     const usdTotal = BigInt(snapshot.stkscUSD.totalSupply);
     const ethTotal = BigInt(snapshot.stkscETH.totalSupply);
 
-    const computed = snapshot.entitlements.map((e) => {
-      const usdBal = BigInt(e.stkscUSD_balance);
-      const ethBal = BigInt(e.stkscETH_balance);
-      return {
+    // Build USDC tree
+    const usdcUsers = snapshot.entitlements
+      .filter((e) => BigInt(e.stkscUSD_balance) > 0n)
+      .map((e) => ({
         address: getAddress(e.address) as `0x${string}`,
-        usdcShareWad: (usdBal * WAD) / usdTotal,
-        wethShareWad: (ethBal * WAD) / ethTotal,
-      };
-    });
+        shareWad: (BigInt(e.stkscUSD_balance) * WAD) / usdTotal,
+      }))
+      .sort((a, b) => (a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1));
 
-    computed.sort((a, b) => (a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1));
+    const usdcLeaves = usdcUsers.map((e) => computeLeaf(e.address, e.shareWad));
+    const usdcTree = buildMerkleTree(usdcLeaves);
 
-    const leaves = computed.map((e) => computeLeaf(e.address, e.usdcShareWad, e.wethShareWad));
-    const { root, proofs } = buildMerkleTree(leaves);
-
-    for (let i = 0; i < leaves.length; i++) {
+    for (let i = 0; i < usdcLeaves.length; i++) {
       assert(
-        verifyProof(proofs[i], root, leaves[i]),
-        `End-to-end: user ${computed[i].address} proof verifies (USDC: ${computed[i].usdcShareWad}, WETH: ${computed[i].wethShareWad})`
+        verifyProof(usdcTree.proofs[i], usdcTree.root, usdcLeaves[i]),
+        `End-to-end USDC: user ${usdcUsers[i].address} proof verifies (share: ${usdcUsers[i].shareWad})`
       );
     }
 
-    // Verify shares: 30%, 50%, 20%
-    assert(computed.find((e) => e.address.endsWith("01"))!.usdcShareWad === 3n * WAD / 10n, "User 1 has 30% USDC share");
-    assert(computed.find((e) => e.address.endsWith("02"))!.usdcShareWad === 5n * WAD / 10n, "User 2 has 50% USDC share");
-    assert(computed.find((e) => e.address.endsWith("03"))!.usdcShareWad === 2n * WAD / 10n, "User 3 has 20% USDC share");
+    // Build WETH tree
+    const wethUsers = snapshot.entitlements
+      .filter((e) => BigInt(e.stkscETH_balance) > 0n)
+      .map((e) => ({
+        address: getAddress(e.address) as `0x${string}`,
+        shareWad: (BigInt(e.stkscETH_balance) * WAD) / ethTotal,
+      }))
+      .sort((a, b) => (a.address.toLowerCase() < b.address.toLowerCase() ? -1 : 1));
+
+    const wethLeaves = wethUsers.map((e) => computeLeaf(e.address, e.shareWad));
+    const wethTree = buildMerkleTree(wethLeaves);
+
+    for (let i = 0; i < wethLeaves.length; i++) {
+      assert(
+        verifyProof(wethTree.proofs[i], wethTree.root, wethLeaves[i]),
+        `End-to-end WETH: user ${wethUsers[i].address} proof verifies (share: ${wethUsers[i].shareWad})`
+      );
+    }
+
+    // Verify USDC shares: 30%, 50%, 20%
+    assert(usdcUsers.find((e) => e.address.endsWith("01"))!.shareWad === 3n * WAD / 10n, "User 1 has 30% USDC share");
+    assert(usdcUsers.find((e) => e.address.endsWith("02"))!.shareWad === 5n * WAD / 10n, "User 2 has 50% USDC share");
+    assert(usdcUsers.find((e) => e.address.endsWith("03"))!.shareWad === 2n * WAD / 10n, "User 3 has 20% USDC share");
+
+    // Verify WETH shares: 20%, 50%, 30%
+    assert(wethUsers.find((e) => e.address.endsWith("01"))!.shareWad === 2n * WAD / 10n, "User 1 has 20% WETH share");
+    assert(wethUsers.find((e) => e.address.endsWith("02"))!.shareWad === 5n * WAD / 10n, "User 2 has 50% WETH share");
+    assert(wethUsers.find((e) => e.address.endsWith("03"))!.shareWad === 3n * WAD / 10n, "User 3 has 30% WETH share");
+  }
+
+  // Test 9: USDC-only users are NOT in WETH tree
+  {
+    const snapshot = {
+      stkscUSD: { totalSupply: "10000000" },
+      stkscETH: { totalSupply: "5000000000000000000" },
+      entitlements: [
+        { address: "0x0000000000000000000000000000000000000001", stkscUSD_balance: "5000000", stkscETH_balance: "0" },           // USDC only
+        { address: "0x0000000000000000000000000000000000000002", stkscUSD_balance: "5000000", stkscETH_balance: "5000000000000000000" }, // Both
+      ],
+    };
+
+    const usdTotal = BigInt(snapshot.stkscUSD.totalSupply);
+    const ethTotal = BigInt(snapshot.stkscETH.totalSupply);
+
+    const usdcUsers = snapshot.entitlements
+      .filter((e) => BigInt(e.stkscUSD_balance) > 0n)
+      .map((e) => ({
+        address: getAddress(e.address) as `0x${string}`,
+        shareWad: (BigInt(e.stkscUSD_balance) * WAD) / usdTotal,
+      }));
+
+    const wethUsers = snapshot.entitlements
+      .filter((e) => BigInt(e.stkscETH_balance) > 0n)
+      .map((e) => ({
+        address: getAddress(e.address) as `0x${string}`,
+        shareWad: (BigInt(e.stkscETH_balance) * WAD) / ethTotal,
+      }));
+
+    assert(usdcUsers.length === 2, "USDC tree has 2 holders");
+    assert(wethUsers.length === 1, "WETH tree has 1 holder (USDC-only user excluded)");
+    assert(wethUsers[0].shareWad === WAD, "WETH-only holder gets 100% share");
+  }
+
+  // Test 10: Different trees have different roots
+  {
+    const leaf1 = computeLeaf("0x0000000000000000000000000000000000000001", 3n * WAD / 10n);
+    const leaf2 = computeLeaf("0x0000000000000000000000000000000000000001", 7n * WAD / 10n);
+
+    // Same address, different shares → different leaves
+    assert(leaf1 !== leaf2, "Same address, different shares → different leaves");
+
+    // Different trees from different shares
+    const tree1 = buildMerkleTree([leaf1]);
+    const tree2 = buildMerkleTree([leaf2]);
+    assert(tree1.root !== tree2.root, "Different share amounts → different roots");
+  }
+
+  // Test 11: Cross-tree proof doesn't work
+  {
+    // USDC tree: user has 30% share
+    const usdcLeaf = computeLeaf("0x0000000000000000000000000000000000000001", 3n * WAD / 10n);
+    const usdcTree = buildMerkleTree([usdcLeaf]);
+
+    // WETH tree: user has 70% share
+    const wethLeaf = computeLeaf("0x0000000000000000000000000000000000000001", 7n * WAD / 10n);
+    const wethTree = buildMerkleTree([wethLeaf]);
+
+    // USDC proof should NOT verify against WETH root
+    assert(
+      !verifyProof(usdcTree.proofs[0], wethTree.root, usdcLeaf),
+      "Cross-tree: USDC proof fails against WETH root"
+    );
+    assert(
+      !verifyProof(wethTree.proofs[0], usdcTree.root, wethLeaf),
+      "Cross-tree: WETH proof fails against USDC root"
+    );
   }
 
   console.log("\n🎉 All tests passed!");
