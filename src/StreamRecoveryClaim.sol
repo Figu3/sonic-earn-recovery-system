@@ -41,6 +41,11 @@ contract StreamRecoveryClaim is EIP712 {
 
     uint256 public roundCount;
 
+    /// @notice Total USDC allocated across all active rounds (prevents over-commitment).
+    uint256 public totalUsdcAllocated;
+    /// @notice Total WETH allocated across all active rounds (prevents over-commitment).
+    uint256 public totalWethAllocated;
+
     struct Round {
         bytes32 usdcMerkleRoot;  // Merkle root for USDC share tree
         bytes32 wethMerkleRoot;  // Merkle root for WETH share tree
@@ -95,6 +100,7 @@ contract StreamRecoveryClaim is EIP712 {
     error DeadlineNotReached();
     error NoRounds();
     error InvalidSignature();
+    error InsufficientBalance();
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier onlyAdmin() {
@@ -135,6 +141,13 @@ contract StreamRecoveryClaim is EIP712 {
         uint256 usdcTotal,
         uint256 wethTotal
     ) external onlyAdmin {
+        // Track cumulative allocation and verify contract holds enough tokens
+        totalUsdcAllocated += usdcTotal;
+        totalWethAllocated += wethTotal;
+
+        if (usdc.balanceOf(address(this)) < totalUsdcAllocated) revert InsufficientBalance();
+        if (weth.balanceOf(address(this)) < totalWethAllocated) revert InsufficientBalance();
+
         uint256 roundId = roundCount++;
 
         rounds[roundId] = Round({
@@ -151,9 +164,19 @@ contract StreamRecoveryClaim is EIP712 {
         emit RoundCreated(roundId, usdcMerkleRoot, wethMerkleRoot, usdcTotal, wethTotal);
     }
 
-    /// @notice Deactivate a round (emergency only).
+    /// @notice Deactivate a round (emergency only). Releases unallocated funds.
     function deactivateRound(uint256 roundId) external onlyAdmin {
-        rounds[roundId].active = false;
+        Round storage round = rounds[roundId];
+        if (!round.active) revert RoundNotActive();
+
+        round.active = false;
+
+        // Release unclaimed allocation back to the pool
+        uint256 usdcUnclaimed = round.usdcTotal - round.usdcClaimed;
+        uint256 wethUnclaimed = round.wethTotal - round.wethClaimed;
+        totalUsdcAllocated -= usdcUnclaimed;
+        totalWethAllocated -= wethUnclaimed;
+
         emit RoundDeactivated(roundId);
     }
 
@@ -172,7 +195,9 @@ contract StreamRecoveryClaim is EIP712 {
             )
         );
         bytes32 digest = _hashTypedDataV4(structHash);
-        address signer = ECDSA.recover(digest, v, r, s);
+
+        // Use bytes signature overload — OZ's ECDSA performs malleability checks
+        address signer = ECDSA.recover(digest, abi.encodePacked(r, s, v));
 
         if (signer != msg.sender) revert InvalidSignature();
 
@@ -333,6 +358,10 @@ contract StreamRecoveryClaim is EIP712 {
         round.usdcClaimed = round.usdcTotal;
         round.wethClaimed = round.wethTotal;
 
+        // Release swept allocation
+        totalUsdcAllocated -= usdcRemaining;
+        totalWethAllocated -= wethRemaining;
+
         if (usdcRemaining > 0) {
             usdc.safeTransfer(to, usdcRemaining);
         }
@@ -379,6 +408,7 @@ contract StreamRecoveryClaim is EIP712 {
         uint256 shareWad,
         bytes32[] calldata proof
     ) external view returns (bool eligible, uint256 amount) {
+        if (roundId >= roundCount) return (false, 0);
         Round storage round = rounds[roundId];
         if (!round.active) return (false, 0);
         if (hasClaimedUsdc[roundId][user]) return (false, 0);
@@ -398,6 +428,7 @@ contract StreamRecoveryClaim is EIP712 {
         uint256 shareWad,
         bytes32[] calldata proof
     ) external view returns (bool eligible, uint256 amount) {
+        if (roundId >= roundCount) return (false, 0);
         Round storage round = rounds[roundId];
         if (!round.active) return (false, 0);
         if (hasClaimedWeth[roundId][user]) return (false, 0);

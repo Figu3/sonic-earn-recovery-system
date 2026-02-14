@@ -195,6 +195,145 @@ contract StreamRecoveryClaimTest is Test {
         claimContract.createRound(bytes32(0), bytes32(0), 0, 0);
     }
 
+    function test_createRound_revert_insufficientUsdc() public {
+        // No tokens minted — should revert
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.InsufficientBalance.selector);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 0);
+    }
+
+    function test_createRound_revert_insufficientWeth() public {
+        usdc.mint(address(claimContract), 1000e6);
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.InsufficientBalance.selector);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+    }
+
+    function test_createRound_revert_overallocation() public {
+        // Fund 1000 USDC total
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 2e18);
+
+        // Round 0: allocate 600 USDC, 1 WETH — OK
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 600e6, 1e18);
+
+        assertEq(claimContract.totalUsdcAllocated(), 600e6);
+        assertEq(claimContract.totalWethAllocated(), 1e18);
+
+        // Round 1: try to allocate 600 more USDC (total = 1200 > 1000) — REVERT
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.InsufficientBalance.selector);
+        claimContract.createRound(bytes32(uint256(3)), bytes32(uint256(4)), 600e6, 0.5e18);
+    }
+
+    function test_allocationTracking_acrossRounds() public {
+        usdc.mint(address(claimContract), 2000e6);
+        weth.mint(address(claimContract), 4e18);
+
+        // Round 0: 1000 USDC, 2 WETH
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 2e18);
+
+        assertEq(claimContract.totalUsdcAllocated(), 1000e6);
+        assertEq(claimContract.totalWethAllocated(), 2e18);
+
+        // Round 1: 1000 USDC, 2 WETH — exactly uses up remaining balance
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(3)), bytes32(uint256(4)), 1000e6, 2e18);
+
+        assertEq(claimContract.totalUsdcAllocated(), 2000e6);
+        assertEq(claimContract.totalWethAllocated(), 4e18);
+    }
+
+    function test_deactivateRound_releasesAllocation() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 2e18);
+
+        // Create round
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 2e18);
+
+        assertEq(claimContract.totalUsdcAllocated(), 1000e6);
+        assertEq(claimContract.totalWethAllocated(), 2e18);
+
+        // Deactivate — should release allocation
+        vm.prank(admin);
+        claimContract.deactivateRound(0);
+
+        assertEq(claimContract.totalUsdcAllocated(), 0);
+        assertEq(claimContract.totalWethAllocated(), 0);
+
+        // Now can create a new round with the same funds
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(5)), bytes32(uint256(6)), 1000e6, 2e18);
+
+        assertEq(claimContract.totalUsdcAllocated(), 1000e6);
+    }
+
+    function test_deactivateRound_revert_alreadyDeactivated() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.prank(admin);
+        claimContract.deactivateRound(0);
+
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.RoundNotActive.selector);
+        claimContract.deactivateRound(0);
+    }
+
+    function test_deactivateRound_partialClaim_releasesRemainder() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](2);
+        usdcShares[0] = UsdcShare(user1, 0.6e18);
+        usdcShares[1] = UsdcShare(user2, 0.4e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves,) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        // user1 claims USDC (60%)
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory proof = Merkle.getProof(usdcLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimUsdc(roundId, 0.6e18, proof);
+
+        assertEq(claimContract.totalUsdcAllocated(), 1000e6);
+
+        // Deactivate — should only release unclaimed portion
+        vm.prank(admin);
+        claimContract.deactivateRound(roundId);
+
+        // 600 USDC was claimed, 400 released; 2 WETH was unclaimed, 2 released
+        assertEq(claimContract.totalUsdcAllocated(), 600e6);
+        assertEq(claimContract.totalWethAllocated(), 0);
+    }
+
+    function test_sweepUnclaimed_releasesAllocation() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 2e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 2e18);
+
+        assertEq(claimContract.totalUsdcAllocated(), 1000e6);
+
+        // Warp past deadline and sweep
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(0, treasury);
+
+        // All allocation released since nobody claimed
+        assertEq(claimContract.totalUsdcAllocated(), 0);
+        assertEq(claimContract.totalWethAllocated(), 0);
+    }
+
     // ─── Claiming USDC ──────────────────────────────────────────────────
 
     function test_claimUsdc() public {
