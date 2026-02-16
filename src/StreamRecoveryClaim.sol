@@ -25,10 +25,18 @@ contract StreamRecoveryClaim is EIP712 {
         keccak256("Waiver(address claimant,string message)");
 
     string public constant WAIVER_MESSAGE =
-        "I acknowledge that I am claiming recovered assets from the Stream Trading "
-        "incident affecting Trevee's stkscUSD/stkscETH vaults. I understand this is "
-        "a partial recovery and I release Trevee and Veda from further claims related "
-        "to this distribution.";
+        "By submitting this claim, I understand and agree that: "
+        "I am receiving a partial recovery related to the Stream Trading incident "
+        "that affected Trevee's stkscUSD and/or stkscETH vaults. "
+        "This payment might not represent a full recovery of my original deposit. "
+        "In exchange for receiving this distribution, I agree not to bring further "
+        "claims against Trevee or Veda Labs (or their teams or affiliates) relating to: "
+        "the Stream Trading incident, the operation of the affected vaults, "
+        "how this distribution was calculated or allocated, or "
+        "the timing or process of this distribution. "
+        "I understand that by claiming these funds, I waive the right to bring legal "
+        "action against Trevee or Veda relating to the matters above. "
+        "I confirm that I am authorized to claim on behalf of this wallet or account.";
 
     uint256 public constant CLAIM_DEADLINE_DURATION = 365 days;
 
