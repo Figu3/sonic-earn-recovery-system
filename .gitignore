@@ -2,6 +2,9 @@
 cache/
 out/
 
+# Forge script broadcast artifacts
+broadcast/
+
 # Node
 scripts/node_modules/
 
