@@ -30,6 +30,36 @@ import * as path from "path";
 
 const WAD = 10n ** 18n;
 
+// ─── Protocol Redirects ────────────────────────────────────────────────
+// Protocol contracts that cannot claim directly. Their share is redirected
+// to a designated recipient address. Balances from multiple contracts
+// mapping to the same recipient are consolidated.
+
+const PROTOCOL_REDIRECTS: Record<string, { target: string; label: string }> = {
+  // Silo → single Silo distribution address
+  "0xe8e1a980a7fc8d47d337d704fa73fbb81ee55c25": {
+    target: "0x4d62b6E166767988106cF7Ee8fE23E480E76FF1d",
+    label: "Silo bwstkscETH-26",
+  },
+  "0x15641c093e566bd951c5e08e505a644478125f70": {
+    target: "0x4d62b6E166767988106cF7Ee8fE23E480E76FF1d",
+    label: "Silo bwstkscUSD-55",
+  },
+  "0x4e09ff794d255a123b00efa30162667a8054a845": {
+    target: "0x4d62b6E166767988106cF7Ee8fE23E480E76FF1d",
+    label: "Silo bwstkscUSD-23",
+  },
+  "0x916cd56a5fbbeae186f488f4db83b00c103b46e7": {
+    target: "0x4d62b6E166767988106cF7Ee8fE23E480E76FF1d",
+    label: "Silo bwstkscETH-other",
+  },
+  // Spectra → resolved to its single holder
+  "0x64fcc3a02eeeba05ef701b7eed066c6ebd5d4e51": {
+    target: "0x65ef8fd6168a4bc2cfebf83b0c83a8a9b7aad1f9",
+    label: "Spectra sw-wstkscETH (1 holder)",
+  },
+};
+
 // ─── Types ─────────────────────────────────────────────────────────────
 
 interface SnapshotEntry {
@@ -284,11 +314,83 @@ function main() {
   console.log(`   stkscUSD totalSupply: ${usdTotalSupply}`);
   console.log(`   stkscETH totalSupply: ${ethTotalSupply}`);
 
-  // Compute per-user shares for each token independently
+  // ── Apply protocol redirects ──────────────────────────────────────────
+  // Replace contract addresses with their designated recipients, merging
+  // balances when multiple contracts map to the same target.
+
+  console.log(`\n🔀 Applying protocol redirects...`);
+
+  const redirectedEntitlements: SnapshotEntry[] = [];
+  const mergedBalances: Record<string, { usd: bigint; eth: bigint; sources: string[] }> = {};
+  let redirectCount = 0;
+
+  for (const entry of snapshot.entitlements) {
+    const addrLower = entry.address.toLowerCase();
+    const redirect = PROTOCOL_REDIRECTS[addrLower];
+
+    if (redirect) {
+      redirectCount++;
+      const targetLower = redirect.target.toLowerCase();
+      const usdBal = BigInt(entry.stkscUSD_balance);
+      const ethBal = BigInt(entry.stkscETH_balance);
+
+      console.log(`   ${redirect.label} (${entry.address})`);
+      console.log(`     → ${redirect.target}`);
+      if (usdBal > 0n) console.log(`     stkscUSD: ${Number(usdBal) / 1e6}`);
+      if (ethBal > 0n) console.log(`     stkscETH: ${Number(ethBal) / 1e18}`);
+
+      if (!mergedBalances[targetLower]) {
+        mergedBalances[targetLower] = { usd: 0n, eth: 0n, sources: [] };
+      }
+      mergedBalances[targetLower].usd += usdBal;
+      mergedBalances[targetLower].eth += ethBal;
+      mergedBalances[targetLower].sources.push(redirect.label);
+    } else {
+      redirectedEntitlements.push(entry);
+    }
+  }
+
+  // Check if any redirect targets already exist as holders and merge
+  for (const [targetLower, merged] of Object.entries(mergedBalances)) {
+    const existingIdx = redirectedEntitlements.findIndex(
+      (e) => e.address.toLowerCase() === targetLower
+    );
+
+    if (existingIdx !== -1) {
+      // Target address already has its own entitlement — add to it
+      const existing = redirectedEntitlements[existingIdx];
+      const newUsd = BigInt(existing.stkscUSD_balance) + merged.usd;
+      const newEth = BigInt(existing.stkscETH_balance) + merged.eth;
+      redirectedEntitlements[existingIdx] = {
+        ...existing,
+        stkscUSD_balance: newUsd.toString(),
+        stkscETH_balance: newEth.toString(),
+        stkscUSD_share: (newUsd * WAD / usdTotalSupply).toString(),
+        stkscETH_share: (newEth * WAD / ethTotalSupply).toString(),
+      };
+      console.log(`   ⚡ Merged into existing holder ${existing.address} (${merged.sources.join(" + ")})`);
+    } else {
+      // New entry for the redirect target
+      const targetAddr = getAddress(targetLower) as string;
+      redirectedEntitlements.push({
+        address: targetAddr,
+        stkscUSD_balance: merged.usd.toString(),
+        stkscETH_balance: merged.eth.toString(),
+        stkscUSD_share: merged.usd > 0n ? ((merged.usd * WAD) / usdTotalSupply).toString() : "0",
+        stkscETH_share: merged.eth > 0n ? ((merged.eth * WAD) / ethTotalSupply).toString() : "0",
+      });
+      console.log(`   ✅ Created new entry for ${targetAddr} (${merged.sources.join(" + ")})`);
+    }
+  }
+
+  console.log(`   Redirected ${redirectCount} protocol contracts → ${Object.keys(mergedBalances).length} target(s)`);
+  console.log(`   Entries: ${snapshot.entitlements.length} → ${redirectedEntitlements.length}`);
+
+  // ── Compute per-user shares ──────────────────────────────────────────
   const usdcShares: UserShare[] = [];
   const wethShares: UserShare[] = [];
 
-  for (const entry of snapshot.entitlements) {
+  for (const entry of redirectedEntitlements) {
     const usdBalance = BigInt(entry.stkscUSD_balance);
     const ethBalance = BigInt(entry.stkscETH_balance);
     const addr = getAddress(entry.address) as `0x${string}`;
@@ -354,6 +456,27 @@ function main() {
   for (let i = 0; i < Math.min(5, byWethShare.length); i++) {
     console.log(`   ${i + 1}. ${byWethShare[i].address}: ${byWethShare[i].sharePct}`);
   }
+
+  // ── CSV Export (for sharing with users) ────────────────────────────────
+  console.log(`\n📄 Generating CSV files...`);
+
+  const usdcCsvPath = path.join(outputDir, "claims-usdc.csv");
+  const wethCsvPath = path.join(outputDir, "claims-weth.csv");
+
+  const usdcCsvRows = ["address,share_pct,share_wad"];
+  for (const e of byUsdcShare) {
+    usdcCsvRows.push(`${e.address},${e.sharePct},${e.shareWad}`);
+  }
+  fs.writeFileSync(usdcCsvPath, usdcCsvRows.join("\n") + "\n");
+
+  const wethCsvRows = ["address,share_pct,share_wad"];
+  for (const e of byWethShare) {
+    wethCsvRows.push(`${e.address},${e.sharePct},${e.shareWad}`);
+  }
+  fs.writeFileSync(wethCsvPath, wethCsvRows.join("\n") + "\n");
+
+  console.log(`   USDC CSV: ${usdcCsvPath} (${byUsdcShare.length} rows)`);
+  console.log(`   WETH CSV: ${wethCsvPath} (${byWethShare.length} rows)`);
 
   console.log(`\n📋 How to use:`);
   console.log(`   1. Deploy StreamRecoveryClaim(admin, usdc, weth)`);
