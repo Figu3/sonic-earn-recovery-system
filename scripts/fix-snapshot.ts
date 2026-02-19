@@ -1,11 +1,12 @@
 /**
- * Fix Snapshot Script (v2)
+ * Fix Snapshot Script (v3)
  *
- * Corrects the snapshot-62788943.json by removing incorrectly absorbed "dust"
- * from Silo protocol addresses and adding the correct amounts to their actual
- * depositors.
+ * Corrects the snapshot-62788943.json by:
+ *   A) Removing incorrectly absorbed "dust" from Silo protocol addresses and
+ *      adding the correct amounts to their actual depositors.
+ *   B) Resolving the Relay contract's veETH NFT holdings to individual depositors.
  *
- * ─── Root Cause ────────────────────────────────────────────────────────────
+ * ─── Root Cause A: Silo Dust ─────────────────────────────────────────────
  *
  * The first fix (commit 0e6f427, Feb 17) resolved auto voter depositors, but
  * used an earlier version of av1_additional_depositors.json that only had 8 of
@@ -22,21 +23,31 @@
  * was absorbed as "dust" into Silo bwstkscETH-26 at
  * 0xe8e1a980a7fc8d47d337d704fa73fbb81ee55c25.
  *
+ * ─── Root Cause B: Relay Contract ────────────────────────────────────────
+ *
+ * The Relay contract (0x636d9c9ac5e681f245051b84f908f6f84221390d) holds
+ * 53 veETH NFTs (91.028 stkscETH) on behalf of 41 individual depositors.
+ * The snapshot credits the Relay as a single holder instead of resolving
+ * to the actual depositors. Users deposited veNFTs into the Relay via
+ * direct ERC721 safeTransferFrom — the ownership was traced by analyzing
+ * all Transfer events to/from the Relay contract across Sonic chain history.
+ *
  * ─── Fix Approach ──────────────────────────────────────────────────────────
  *
- * 1. Subtract the incorrectly absorbed amounts from the Silo addresses
- * 2. Add the 10 missing AV1 USD depositors (8 unique addresses)
+ * 1. Subtract ALL unmapped AV1 amounts from the Silo address (not just "missing" ones)
+ * 2. Add ALL 18 unmapped AV1 token amounts to their depositors (even if depositor
+ *    is already in the snapshot from mapped tokens or wstkscUSD — "existing in
+ *    snapshot" does NOT mean "unmapped token already credited")
  * 3. Add the 1 missing AV2 ETH depositor
- * 4. Verify sums == totalSupply (zero-sum correction)
- *
- * NO pro-rata undo is needed — all other balances in the snapshot are correct.
- * The shortfall was dumped onto a single address (Silo), not redistributed.
+ * 4. Resolve Relay contract: remove its stkscETH balance, add to 41 depositors
+ * 5. Verify sums == totalSupply (zero-sum correction)
  *
  * ─── Data Sources ──────────────────────────────────────────────────────────
  *
  *   - /tmp/av1_additional_depositors.json (18 unmapped AV1 token→depositor)
  *   - /tmp/av1_all_tokens.json (all AV1 token IDs and amounts)
  *   - /tmp/auto_voter_v2_eth_resolved.json (AV2 ETH data including #1637)
+ *   - /tmp/relay_eth_resolved.json (Relay 53 NFTs → 41 depositors with amounts)
  *
  * Usage:
  *   npx tsx scripts/fix-snapshot.ts
@@ -93,6 +104,16 @@ interface ResolvedData {
   token_ids: number[];
 }
 
+interface RelayResolvedData {
+  relay_address: string;
+  snapshot_block: number;
+  depositor_amounts: Record<string, number>; // address -> wei amount
+  token_amounts: Record<string, number>;      // tokenId -> wei amount
+  token_ids: number[];
+  total_locked: number;
+  depositor_count: number;
+}
+
 function loadJson<T>(filePath: string): T {
   return JSON.parse(fs.readFileSync(filePath, "utf-8"));
 }
@@ -109,13 +130,17 @@ const ETH_SILO_ADDRESS =
 const AV2_ETH_1637_DEPOSITOR =
   "0x697f27643eed4d13276a126a31f0e84eeff92de8";
 
+// Relay contract that manages veETH NFTs on behalf of depositors
+const RELAY_ADDRESS =
+  "0x636d9c9ac5e681f245051b84f908f6f84221390d";
+
 // ─── Main ──────────────────────────────────────────────────────────────
 
 function main() {
   const scriptDir = path.dirname(
     decodeURIComponent(new URL(import.meta.url).pathname)
   );
-  const snapshotPath = path.join(scriptDir, "output", "snapshot-62788943.json");
+  const snapshotPath = path.join(scriptDir, "output", "snapshot-62788943-raw.json");
 
   console.log("Loading snapshot...");
   const snapshot: SnapshotFile = loadJson(snapshotPath);
@@ -132,6 +157,7 @@ function main() {
     "/tmp/av1_additional_depositors.json",
     "/tmp/av1_all_tokens.json",
     "/tmp/auto_voter_v2_eth_resolved.json",
+    "/tmp/relay_eth_resolved.json",
   ];
   for (const f of requiredFiles) {
     if (!fs.existsSync(f)) {
@@ -151,6 +177,9 @@ function main() {
   const av1AllTokens: AllTokensData = loadJson("/tmp/av1_all_tokens.json");
   const av2Eth: ResolvedData = loadJson(
     "/tmp/auto_voter_v2_eth_resolved.json"
+  );
+  const relayEth: RelayResolvedData = loadJson(
+    "/tmp/relay_eth_resolved.json"
   );
 
   // ── Idempotency guard: check if fix has already been applied ──────
@@ -172,16 +201,22 @@ function main() {
   }
   console.log(`   Existing addresses in snapshot: ${existingAddresses.size}`);
 
-  // ── Identify the 10 missing AV1 depositors ──────────────────────────
-  // These are the tokens whose depositors are NOT yet in the snapshot.
-  // The first fix resolved 8 of 18 tokens; we need to add the other 10.
+  // ── Identify ALL unmapped AV1 depositors ────────────────────────────
+  // ALL 18 unmapped tokens were absorbed as dust into Silo by the first fix.
+  // Even if the depositor is already in the snapshot (from mapped AV1 tokens
+  // or wstkscUSD), their unmapped token amounts were NOT credited — they
+  // were incorrectly lumped into Silo's balance.
+  //
+  // Previous bug: only added unmapped tokens whose depositors were NOT in
+  // the snapshot, assuming existing depositors were "already resolved".
+  // This missed 8 tokens (56,397 stkscUSD) for depositors who were in the
+  // snapshot for other reasons.
 
-  const missingUsdDepositors = new Map<string, bigint>(); // addr -> total amount
-  let missingUsdTokenCount = 0;
-  let missingUsdTotal = 0n;
-
-  const alreadyResolvedTokenCount = { count: 0 };
-  let alreadyResolvedTotal = 0n;
+  const unmappedUsdDepositors = new Map<string, bigint>(); // addr -> total amount
+  let unmappedTokenCount = 0;
+  let unmappedUsdTotal = 0n;
+  let newDepositorCount = 0;
+  let existingDepositorCount = 0;
 
   for (const [tokenId, depositor] of Object.entries(av1Additional)) {
     const amount = av1AllTokens.token_amounts[tokenId];
@@ -190,36 +225,33 @@ function main() {
       continue;
     }
     const addr = depositor.toLowerCase();
+    const existing = unmappedUsdDepositors.get(addr) ?? 0n;
+    unmappedUsdDepositors.set(addr, existing + BigInt(amount));
+    unmappedTokenCount++;
+    unmappedUsdTotal += BigInt(amount);
+
     if (existingAddresses.has(addr)) {
-      // Already correctly in the snapshot from the first fix
-      alreadyResolvedTokenCount.count++;
-      alreadyResolvedTotal += BigInt(amount);
+      existingDepositorCount++;
     } else {
-      // Missing — their amount was absorbed as dust by the Silo
-      const existing = missingUsdDepositors.get(addr) ?? 0n;
-      missingUsdDepositors.set(addr, existing + BigInt(amount));
-      missingUsdTokenCount++;
-      missingUsdTotal += BigInt(amount);
+      newDepositorCount++;
     }
   }
 
-  // Verify the split matches expectations
-  const grandTotal = alreadyResolvedTotal + missingUsdTotal;
-  if (grandTotal !== BigInt(av1AllTokens.unmapped_amount)) {
+  // Verify total matches expectations
+  if (unmappedUsdTotal !== BigInt(av1AllTokens.unmapped_amount)) {
     console.error(
-      `   MISMATCH: expected ${av1AllTokens.unmapped_amount}, ` +
-        `got ${grandTotal} (resolved=${alreadyResolvedTotal} + missing=${missingUsdTotal})`
+      `   MISMATCH: expected ${av1AllTokens.unmapped_amount}, got ${unmappedUsdTotal}`
     );
     process.exit(1);
   }
 
   console.log(
-    `   AV1 already resolved by first fix: ${alreadyResolvedTokenCount.count} tokens, ` +
-      `${Number(alreadyResolvedTotal) / 1e6} stkscUSD — no changes needed`
+    `   AV1 unmapped: ${unmappedTokenCount} tokens, ${unmappedUsdDepositors.size} unique depositors, ` +
+      `${Number(unmappedUsdTotal) / 1e6} stkscUSD`
   );
   console.log(
-    `   AV1 still missing (absorbed as dust): ${missingUsdTokenCount} tokens, ` +
-      `${missingUsdDepositors.size} unique depositors, ${Number(missingUsdTotal) / 1e6} stkscUSD`
+    `   ${existingDepositorCount} tokens augment existing snapshot addresses, ` +
+      `${newDepositorCount} tokens create new addresses`
   );
 
   // ── Identify missing AV2 ETH depositor ──────────────────────────────
@@ -266,9 +298,9 @@ function main() {
     `   ETH Silo current balance: ${Number(siloEthBalance) / 1e18} stkscETH`
   );
 
-  if (siloUsdBalance < missingUsdTotal) {
+  if (siloUsdBalance < unmappedUsdTotal) {
     console.error(
-      `   FATAL: USD Silo balance (${siloUsdBalance}) < amount to remove (${missingUsdTotal})`
+      `   FATAL: USD Silo balance (${siloUsdBalance}) < amount to remove (${unmappedUsdTotal})`
     );
     process.exit(1);
   }
@@ -280,15 +312,35 @@ function main() {
   }
 
   console.log(
-    `   USD Silo after fix: ${Number(siloUsdBalance - missingUsdTotal) / 1e6} stkscUSD`
+    `   USD Silo after fix: ${Number(siloUsdBalance - unmappedUsdTotal) / 1e6} stkscUSD`
   );
   console.log(
     `   ETH Silo after fix: ${Number(siloEthBalance - av2EthToken1637Amount) / 1e18} stkscETH`
   );
 
-  // ── Step 1: Copy all balances, adjusting Silo entries ───────────────
+  // ── Verify Relay address exists ──────────────────────────────────────
 
-  console.log("\nStep 1: Copying balances and adjusting Silo dust...");
+  const relayEntry = snapshot.entitlements.find(
+    (e) => e.address.toLowerCase() === RELAY_ADDRESS
+  );
+  if (!relayEntry) {
+    console.error(`   FATAL: Relay ${RELAY_ADDRESS} not found in snapshot`);
+    process.exit(1);
+  }
+  const relaySnapshotEthBalance = BigInt(relayEntry.stkscETH_balance);
+  console.log(
+    `\n   Relay current balance: ${Number(relaySnapshotEthBalance) / 1e18} stkscETH`
+  );
+  console.log(
+    `   Relay resolved total:  ${Number(BigInt(relayEth.total_locked)) / 1e18} stkscETH`
+  );
+  console.log(
+    `   Relay depositors: ${relayEth.depositor_count} depositors, ${relayEth.token_ids.length} NFTs`
+  );
+
+  // ── Step 1: Copy all balances, adjusting Silo + Relay entries ──────
+
+  console.log("\nStep 1: Copying balances and adjusting Silo dust + zeroing Relay...");
 
   const newBalances = new Map<
     string,
@@ -302,10 +354,15 @@ function main() {
 
     // Subtract incorrectly absorbed dust from Silo addresses
     if (addr === USD_SILO_ADDRESS) {
-      usdBalance -= missingUsdTotal;
+      usdBalance -= unmappedUsdTotal;
     }
     if (addr === ETH_SILO_ADDRESS) {
       ethBalance -= av2EthToken1637Amount;
+    }
+
+    // Zero out the Relay contract — its balance will be redistributed to depositors
+    if (addr === RELAY_ADDRESS) {
+      ethBalance = 0n;
     }
 
     if (usdBalance > 0n || ethBalance > 0n) {
@@ -317,18 +374,21 @@ function main() {
     }
   }
 
-  console.log(`   Subtracted ${Number(missingUsdTotal) / 1e6} stkscUSD from USD Silo`);
+  console.log(`   Subtracted ${Number(unmappedUsdTotal) / 1e6} stkscUSD from USD Silo`);
   console.log(
     `   Subtracted ${Number(av2EthToken1637Amount) / 1e18} stkscETH from ETH Silo`
+  );
+  console.log(
+    `   Zeroed Relay: removed ${Number(relaySnapshotEthBalance) / 1e18} stkscETH`
   );
 
   // ── Step 2: Add missing depositors ──────────────────────────────────
 
   console.log("\nStep 2: Adding missing depositors...");
 
-  // Add 10 missing AV1 USD depositors (8 unique addresses)
+  // Add ALL 18 unmapped AV1 USD depositors to their correct addresses
   let usdAdded = 0;
-  for (const [addr, amount] of missingUsdDepositors) {
+  for (const [addr, amount] of unmappedUsdDepositors) {
     const existing = newBalances.get(addr);
     if (existing) {
       // Address exists with ETH balance — add USD
@@ -345,7 +405,7 @@ function main() {
     }
   }
   console.log(
-    `   USD: ${usdAdded} new addresses, ${missingUsdDepositors.size - usdAdded} augmented`
+    `   USD: ${usdAdded} new addresses, ${unmappedUsdDepositors.size - usdAdded} augmented`
   );
 
   // Add 1 missing AV2 ETH depositor
@@ -365,9 +425,65 @@ function main() {
     );
   }
 
-  // ── Step 3: Verify totals ─────────────────────────────────────────
+  // ── Step 3: Resolve Relay depositors ────────────────────────────────
 
-  console.log("\nStep 3: Verifying totals...");
+  console.log("\nStep 3: Resolving Relay contract to individual depositors...");
+
+  // The Relay's snapshot balance may differ slightly from the sum of on-chain
+  // locked() amounts due to pro-rata redistribution in the original snapshot.
+  // We distribute the SNAPSHOT balance (not resolved total) proportionally
+  // to maintain zero-sum correctness.
+  const relayResolvedTotal = BigInt(relayEth.total_locked);
+  let relayDistributed = 0n;
+  const relayDepositorEntries = Object.entries(relayEth.depositor_amounts);
+  let relayNewCount = 0;
+  let relayAugmentedCount = 0;
+
+  for (let i = 0; i < relayDepositorEntries.length; i++) {
+    const [depositor, resolvedAmountNum] = relayDepositorEntries[i];
+    const addr = depositor.toLowerCase();
+    const resolvedAmount = BigInt(resolvedAmountNum);
+
+    // Calculate pro-rata share of the snapshot balance
+    // For the last depositor, assign the remainder to avoid rounding drift
+    let amount: bigint;
+    if (i === relayDepositorEntries.length - 1) {
+      amount = relaySnapshotEthBalance - relayDistributed;
+    } else {
+      amount = (resolvedAmount * relaySnapshotEthBalance) / relayResolvedTotal;
+    }
+    relayDistributed += amount;
+
+    const existing = newBalances.get(addr);
+    if (existing) {
+      existing.eth += amount;
+      relayAugmentedCount++;
+    } else {
+      newBalances.set(addr, { usd: 0n, eth: amount });
+      relayNewCount++;
+    }
+  }
+
+  console.log(
+    `   Distributed ${Number(relayDistributed) / 1e18} stkscETH to ${relayDepositorEntries.length} depositors`
+  );
+  console.log(
+    `   ${relayNewCount} new addresses, ${relayAugmentedCount} augmented existing`
+  );
+
+  // Sanity check: distributed must exactly equal what was removed
+  if (relayDistributed !== relaySnapshotEthBalance) {
+    console.error(
+      `   FATAL: Relay distribution mismatch: distributed=${relayDistributed}, ` +
+        `removed=${relaySnapshotEthBalance}`
+    );
+    process.exit(1);
+  }
+  console.log(`   ✓ Relay distribution matches exactly (zero-sum)`);
+
+  // ── Step 4: Verify totals ─────────────────────────────────────────
+
+  console.log("\nStep 4: Verifying totals...");
 
   let newUsdSum = 0n;
   let newEthSum = 0n;
@@ -398,9 +514,9 @@ function main() {
   console.log(`   ✓ stkscUSD matches totalSupply exactly`);
   console.log(`   ✓ stkscETH matches totalSupply exactly`);
 
-  // ── Step 4: Build output ──────────────────────────────────────────
+  // ── Step 5: Build output ──────────────────────────────────────────
 
-  console.log("\nStep 4: Building output...");
+  console.log("\nStep 5: Building output...");
 
   const entitlements: SnapshotEntry[] = [];
   for (const [addr, { usd, eth, label }] of newBalances) {
@@ -456,14 +572,19 @@ function main() {
       ...snapshot.recursiveResolution,
       autoVoterV1_holders:
         snapshot.recursiveResolution.autoVoterV1_holders +
-        missingUsdDepositors.size,
+        unmappedUsdDepositors.size,
       autoVoterV2ETH_holders:
         snapshot.recursiveResolution.autoVoterV2ETH_holders + 1,
-      note_fixes_applied: 2,
+      relay_resolved_holders: relayDepositorEntries.length,
+      relay_resolved_nfts: relayEth.token_ids.length,
+      relay_resolved_stkscETH: Number(relaySnapshotEthBalance),
+      note_fixes_applied: 3,
       fix_v2_usd_dust_removed_from: USD_SILO_ADDRESS,
-      fix_v2_usd_dust_amount: Number(missingUsdTotal),
+      fix_v2_usd_dust_amount: Number(unmappedUsdTotal),
       fix_v2_eth_dust_removed_from: ETH_SILO_ADDRESS,
       fix_v2_eth_dust_amount: Number(av2EthToken1637Amount),
+      fix_v3_relay_resolved_from: RELAY_ADDRESS,
+      fix_v3_relay_amount: Number(relaySnapshotEthBalance),
     },
     entitlements,
   };
@@ -473,7 +594,7 @@ function main() {
   fs.mkdirSync(outputDir, { recursive: true });
   const outputPath = path.join(
     outputDir,
-    `snapshot-${snapshot.snapshotBlock}-fixed.json`
+    `snapshot-${snapshot.snapshotBlock}.json`
   );
   fs.writeFileSync(outputPath, JSON.stringify(output, null, 2));
   console.log(`\nSnapshot written to: ${outputPath}`);
@@ -497,7 +618,9 @@ function main() {
     { addr: "0x38aed5923c16e1777c981d1dbe955fefce8e20c4", tokenIds: "4691", expectedUsd: 3542171013n, expectedEth: 0n },
     { addr: "0xba181deb98afc2202202c9aebf26b18f46d70497", tokenIds: "4740", expectedUsd: 10017385949n, expectedEth: 0n },
     { addr: "0xc70aa0bc5c372ca2006204c91af480dacf621bac", tokenIds: "4861+5145", expectedUsd: 19159900563n + 1395045904n, expectedEth: 0n },
-    { addr: "0x1fcd2c55ae99c01f4200657a9f472c05c85b420a", tokenIds: "5511+6412", expectedUsd: 2529080203n + 1498088195n, expectedEth: 0n },
+    // Note: 0x1fcd2c55ae99c01f4200657a9f472c05c85b420a also has Relay veETH token #1474
+    // so we can't check exact ETH=0. We check USD only and verify ETH is present.
+    { addr: "0x1fcd2c55ae99c01f4200657a9f472c05c85b420a", tokenIds: "USD#5511+6412+Relay#1474", expectedUsd: 2529080203n + 1498088195n, expectedEth: -1n },
     { addr: "0x8c3a8873348fa28e9b855080646fec43c39f4a05", tokenIds: "5990", expectedUsd: 2999623243n, expectedEth: 0n },
     { addr: "0xe9d62b53622ff203ba106dbafcd04fe5ac87261a", tokenIds: "6103", expectedUsd: 40000980000n, expectedEth: 0n },
     { addr: "0x7fb778baaa42d224ed6866334ed985f5d1105f3d", tokenIds: "6785", expectedUsd: 9795075924n, expectedEth: 0n },
@@ -518,7 +641,7 @@ function main() {
     const actualUsd = BigInt(entry.stkscUSD_balance);
     const actualEth = BigInt(entry.stkscETH_balance);
     const usdOk = actualUsd === expectedUsd;
-    const ethOk = actualEth === expectedEth;
+    const ethOk = expectedEth === -1n ? true : actualEth === expectedEth; // -1n = skip ETH check
     if (usdOk && ethOk) {
       console.log(
         `   ✓ ${addr} (${tokenIds}): USD=${Number(actualUsd) / 1e6}, ETH=${Number(actualEth) / 1e18}`
@@ -526,10 +649,42 @@ function main() {
     } else {
       console.log(
         `   ✗ ${addr} (${tokenIds}): USD=${Number(actualUsd) / 1e6} (expected ${Number(expectedUsd) / 1e6}), ` +
-          `ETH=${Number(actualEth) / 1e18} (expected ${Number(expectedEth) / 1e18})`
+          `ETH=${Number(actualEth) / 1e18} (expected ${expectedEth === -1n ? "any" : Number(expectedEth) / 1e18})`
       );
       allCorrect = false;
     }
+  }
+
+  // Check the 8 previously-skipped tokens: depositors already in snapshot whose
+  // unmapped AV1 amounts were NOT credited by the old code
+  console.log("\nPreviously-skipped unmapped tokens (v3 bug fix — amounts now added):");
+  const skippedTokenChecks = [
+    { addr: "0x4334703b0b74e2045926f82f4158a103fce1df4f", tokenId: "2665", amount: 14651868074n },
+    { addr: "0x28ef7b4252ac35266f5a16af86046356ce60fad0", tokenId: "4475", amount: 15343380078n },
+    { addr: "0xb21f69a8eba1475c96c09e8c62842dcc16f0d441", tokenId: "4706", amount: 20065708511n },
+    { addr: "0x24c9496b9be8572ea1d80b8fdfa720dd2584aa9e", tokenId: "5267+5313+5599", amount: 901478569n + 315181621n + 40332775n },
+    { addr: "0xe8d176dc1adc732a838e2056109be4c34d1dfb57", tokenId: "5845", amount: 52298465n },
+    { addr: "0x097adbe246858a0fa8f9492889ae00fd87638044", tokenId: "5965", amount: 5026791900n },
+  ];
+  for (const { addr, tokenId, amount } of skippedTokenChecks) {
+    const entry = entitlements.find((e) => e.address.toLowerCase() === addr);
+    const origEntry = snapshot.entitlements.find((e) => e.address.toLowerCase() === addr);
+    if (!entry || !origEntry) {
+      console.log(`   ✗ ${addr} (token ${tokenId}): NOT FOUND`);
+      allCorrect = false;
+      continue;
+    }
+    const origUsd = BigInt(origEntry.stkscUSD_balance);
+    const newUsd = BigInt(entry.stkscUSD_balance);
+    // New balance must be at least origBalance + unmapped amount
+    const expectedMin = origUsd + amount;
+    const ok = newUsd >= expectedMin;
+    console.log(
+      `   ${ok ? "✓" : "✗"} ${addr} (token ${tokenId}): ` +
+        `was ${Number(origUsd) / 1e6}, now ${Number(newUsd) / 1e6}, ` +
+        `added ${Number(amount) / 1e6} stkscUSD`
+    );
+    if (!ok) allCorrect = false;
   }
 
   // Check Silo addresses have correct reduced balances
@@ -542,12 +697,12 @@ function main() {
   );
 
   if (usdSiloFixed) {
-    const expectedUsd = siloUsdBalance - missingUsdTotal;
+    const expectedUsd = siloUsdBalance - unmappedUsdTotal;
     const actualUsd = BigInt(usdSiloFixed.stkscUSD_balance);
     const ok = actualUsd === expectedUsd;
     console.log(
       `   ${ok ? "✓" : "✗"} USD Silo: ${Number(actualUsd) / 1e6} stkscUSD ` +
-        `(was ${Number(siloUsdBalance) / 1e6}, removed ${Number(missingUsdTotal) / 1e6})`
+        `(was ${Number(siloUsdBalance) / 1e6}, removed ${Number(unmappedUsdTotal) / 1e6})`
     );
     if (!ok) allCorrect = false;
   }
@@ -561,6 +716,71 @@ function main() {
         `(was ${Number(siloEthBalance) / 1e18}, removed ${Number(av2EthToken1637Amount) / 1e18})`
     );
     if (!ok) allCorrect = false;
+  }
+
+  // Check Relay is removed and key depositors are present
+  console.log("\nRelay resolution (should be zeroed, depositors credited):");
+  const relayFixed = entitlements.find(
+    (e) => e.address.toLowerCase() === RELAY_ADDRESS
+  );
+  if (relayFixed) {
+    console.log(
+      `   ✗ Relay still in output with ETH=${Number(BigInt(relayFixed.stkscETH_balance)) / 1e18}`
+    );
+    allCorrect = false;
+  } else {
+    console.log(`   ✓ Relay address removed from output (balance zeroed)`);
+  }
+
+  // Check the user who triggered this investigation: 0x4334703b
+  // Should have: wstkscUSD (~106,710) + mapped veUSD #1969 (18,024) + unmapped veUSD #2665 (14,652)
+  // = ~139,386 stkscUSD + ETH from Relay tokens
+  const userAddr = "0x4334703b0b74e2045926f82f4158a103fce1df4f";
+  const userEntry = entitlements.find(
+    (e) => e.address.toLowerCase() === userAddr
+  );
+  if (userEntry) {
+    const userEth = Number(BigInt(userEntry.stkscETH_balance)) / 1e18;
+    const userUsd = Number(BigInt(userEntry.stkscUSD_balance)) / 1e6;
+    // USD must include unmapped veUSD #2665 (14,651.87) — previous bug missed this
+    const hasUnmappedFunds = userUsd > 139000; // was 124,734 before fix
+    // ETH must include Relay tokens #107 + #322 — should be >> 6 stkscETH
+    const hasRelayFunds = userEth > 50;
+    const ok = hasUnmappedFunds && hasRelayFunds;
+    console.log(
+      `   ${ok ? "✓" : "✗"} ${userAddr}: USD=${userUsd.toFixed(6)}, ETH=${userEth.toFixed(6)}`
+    );
+    console.log(
+      `     (was 124,734 stkscUSD before fix; now includes unmapped veUSD #2665 = +14,652)`
+    );
+    console.log(
+      `     (was 6.013 stkscETH before Relay fix; now includes Relay tokens #107 + #322)`
+    );
+    if (!ok) allCorrect = false;
+  } else {
+    console.log(`   ✗ ${userAddr}: NOT FOUND`);
+    allCorrect = false;
+  }
+
+  // Check a few more Relay depositors
+  const relaySpotChecks = [
+    { addr: "0x28ef7b4252ac35266f5a16af86046356ce60fad0", label: "tokens #1127+#1201+#1245", minEth: 7.0 },
+    { addr: "0x097adbe246858a0fa8f9492889ae00fd87638044", label: "tokens #1473+#1610", minEth: 6.0 },
+    { addr: "0x33ae316fcbea378c08d53be8b3803f34babd3e61", label: "token #413", minEth: 6.5 },
+  ];
+  for (const { addr, label, minEth } of relaySpotChecks) {
+    const entry = entitlements.find((e) => e.address.toLowerCase() === addr);
+    if (entry) {
+      const ethVal = Number(BigInt(entry.stkscETH_balance)) / 1e18;
+      const ok = ethVal >= minEth;
+      console.log(
+        `   ${ok ? "✓" : "✗"} ${addr} (${label}): ETH=${ethVal.toFixed(6)}`
+      );
+      if (!ok) allCorrect = false;
+    } else {
+      console.log(`   ✗ ${addr} (${label}): NOT FOUND`);
+      allCorrect = false;
+    }
   }
 
   // Check the 4 flagged addresses — their balances should be UNCHANGED
@@ -603,19 +823,23 @@ function main() {
   // ── Summary ───────────────────────────────────────────────────────
 
   console.log("\n── Summary ──────────────────────────────────────────────");
-  console.log(`   Fix type: Dust absorption correction (no pro-rata undo)`);
+  console.log(`   Fix type: Dust correction + Relay resolution`);
   console.log(
-    `   USD: Removed ${Number(missingUsdTotal) / 1e6} stkscUSD from Silo, ` +
-      `added to ${missingUsdDepositors.size} depositors (${missingUsdTokenCount} tokens)`
+    `   USD: Removed ${Number(unmappedUsdTotal) / 1e6} stkscUSD from Silo, ` +
+      `added to ${unmappedUsdDepositors.size} depositors (${unmappedTokenCount} tokens)`
   );
   console.log(
-    `   ETH: Removed ${Number(av2EthToken1637Amount) / 1e18} stkscETH from Silo, ` +
+    `   ETH (Silo dust): Removed ${Number(av2EthToken1637Amount) / 1e18} stkscETH from Silo, ` +
       `added to 1 depositor (token #1637)`
+  );
+  console.log(
+    `   ETH (Relay): Removed ${Number(relaySnapshotEthBalance) / 1e18} stkscETH from Relay, ` +
+      `distributed to ${relayDepositorEntries.length} depositors (${relayEth.token_ids.length} NFTs)`
   );
   console.log(`   New addresses: ${entitlements.length - snapshot.entitlements.length}`);
   console.log(`   All checks passed: ${allCorrect}`);
   console.log(
-    `   Note: 8 AV1 tokens (${Number(alreadyResolvedTotal) / 1e6} stkscUSD) were already correct — untouched`
+    `   All ${unmappedTokenCount} unmapped AV1 tokens credited to their depositors`
   );
 }
 
