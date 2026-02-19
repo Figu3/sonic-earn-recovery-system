@@ -299,7 +299,10 @@ async function main() {
   console.log(`  stkscETH: sum=${ethSum} totalSupply=${ethTotalSupply} match=${ethSum === ethTotalSupply}`);
 
   if (usdSum !== usdTotalSupply || ethSum !== ethTotalSupply) {
-    console.warn("⚠️  WARNING: Entitlement sum does not match total supply. Investigate before proceeding.");
+    console.error("❌ FATAL: Entitlement sum does not match total supply. Aborting.");
+    console.error(`  stkscUSD diff: ${usdSum - usdTotalSupply}`);
+    console.error(`  stkscETH diff: ${ethSum - ethTotalSupply}`);
+    process.exit(1);
   }
 
   // Write output

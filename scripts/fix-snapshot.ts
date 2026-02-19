@@ -126,6 +126,21 @@ function main() {
   const ethTotalSupply = BigInt(snapshot.stkscETH.totalSupply);
   const WAD = 10n ** 18n;
 
+  // ── Verify required data files exist ────────────────────────────────
+
+  const requiredFiles = [
+    "/tmp/av1_additional_depositors.json",
+    "/tmp/av1_all_tokens.json",
+    "/tmp/auto_voter_v2_eth_resolved.json",
+  ];
+  for (const f of requiredFiles) {
+    if (!fs.existsSync(f)) {
+      console.error(`❌ Required data file not found: ${f}`);
+      console.error(`   Run the investigation scripts first to generate these files.`);
+      process.exit(1);
+    }
+  }
+
   // ── Load resolved data ──────────────────────────────────────────────
 
   console.log("\nLoading resolved data...");
@@ -137,6 +152,18 @@ function main() {
   const av2Eth: ResolvedData = loadJson(
     "/tmp/auto_voter_v2_eth_resolved.json"
   );
+
+  // ── Idempotency guard: check if fix has already been applied ──────
+  // If the AV2 ETH depositor is already in the snapshot, the fix was
+  // already applied. Running again would incorrectly subtract from Silo twice.
+  const alreadyFixed = snapshot.entitlements.some(
+    (e) => e.address.toLowerCase() === AV2_ETH_1637_DEPOSITOR.toLowerCase()
+      && BigInt(e.stkscETH_balance) > 0n
+  );
+  if (alreadyFixed) {
+    console.log("\n⚠️  Fix already applied (AV2 ETH depositor already present). Skipping.");
+    process.exit(0);
+  }
 
   // Build set of existing addresses in the snapshot
   const existingAddresses = new Set<string>();

@@ -109,6 +109,7 @@ contract StreamRecoveryClaim is EIP712 {
     error NoRounds();
     error InvalidSignature();
     error InsufficientBalance();
+    error ClaimExceedsTotal();
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier onlyAdmin() {
@@ -305,6 +306,7 @@ contract StreamRecoveryClaim is EIP712 {
 
         // Compute payout
         uint256 amount = (shareWad * round.usdcTotal) / WAD;
+        if (round.usdcClaimed + amount > round.usdcTotal) revert ClaimExceedsTotal();
 
         // Effects
         hasClaimedUsdc[roundId][msg.sender] = true;
@@ -335,6 +337,7 @@ contract StreamRecoveryClaim is EIP712 {
 
         // Compute payout
         uint256 amount = (shareWad * round.wethTotal) / WAD;
+        if (round.wethClaimed + amount > round.wethTotal) revert ClaimExceedsTotal();
 
         // Effects
         hasClaimedWeth[roundId][msg.sender] = true;
@@ -356,6 +359,7 @@ contract StreamRecoveryClaim is EIP712 {
     function sweepUnclaimed(uint256 roundId, address to) external onlyAdmin {
         if (to == address(0)) revert ZeroAddress();
         Round storage round = rounds[roundId];
+        if (!round.active) revert RoundNotActive();
         if (block.timestamp < round.claimDeadline) revert DeadlineNotReached();
 
         uint256 usdcRemaining = round.usdcTotal - round.usdcClaimed;

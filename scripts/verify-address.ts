@@ -66,7 +66,8 @@ Example:
     process.exit(1);
   }
 
-  const outputDir = path.join(__dirname, "output");
+  const scriptDir = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname));
+  const outputDir = path.join(scriptDir, "output");
 
   // ── Load snapshot ──
   const snapshotFiles = fs.readdirSync(outputDir).filter((f) => f.startsWith("snapshot-") && f.endsWith(".json"));

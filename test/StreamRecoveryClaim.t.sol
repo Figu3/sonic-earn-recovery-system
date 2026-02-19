@@ -20,6 +20,8 @@ contract StreamRecoveryClaimTest is Test {
     address user2;
     uint256 user3Pk;
     address user3;
+    uint256 user4Pk;
+    address user4;
 
     uint256 constant WAD = 1e18;
 
@@ -27,6 +29,7 @@ contract StreamRecoveryClaimTest is Test {
         (user1, user1Pk) = makeAddrAndKey("user1");
         (user2, user2Pk) = makeAddrAndKey("user2");
         (user3, user3Pk) = makeAddrAndKey("user3");
+        (user4, user4Pk) = makeAddrAndKey("user4");
 
         usdc = new ERC20Mock("USD Coin", "USDC", 6);
         weth = new ERC20Mock("Wrapped Ether", "WETH", 18);
@@ -887,5 +890,453 @@ contract StreamRecoveryClaimTest is Test {
         claimContract.claimWeth(roundId, 0.5e18, proof);
         (bool eligible2,) = claimContract.canClaimWeth(roundId, user1, 0.5e18, proof);
         assertFalse(eligible2);
+    }
+
+    // ─── WETH Claim Reverts (parity with USDC) ──────────────────────────
+
+    function test_claimWeth_revert_noWaiver() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 0.5e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) = _setupRound(usdcShares, wethShares, 500e6, 0.5e18);
+
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.WaiverNotSigned.selector);
+        claimContract.claimWeth(roundId, 0.5e18, proof);
+    }
+
+    function test_claimWeth_revert_roundDeactivated() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 0.5e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) = _setupRound(usdcShares, wethShares, 500e6, 0.5e18);
+        _executeSignWaiver(user1Pk);
+
+        vm.prank(admin);
+        claimContract.deactivateRound(roundId);
+
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.RoundNotActive.selector);
+        claimContract.claimWeth(roundId, 0.5e18, proof);
+    }
+
+    function test_claimWeth_revert_paused() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 0.5e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) = _setupRound(usdcShares, wethShares, 500e6, 0.5e18);
+        _executeSignWaiver(user1Pk);
+
+        vm.prank(admin);
+        claimContract.pause();
+
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.IsPaused.selector);
+        claimContract.claimWeth(roundId, 0.5e18, proof);
+    }
+
+    // ─── Access Control Reverts ──────────────────────────────────────────
+
+    function test_deactivateRound_revert_notAdmin() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.deactivateRound(0);
+    }
+
+    function test_sweepUnclaimed_revert_notAdmin() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.warp(block.timestamp + 366 days);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.sweepUnclaimed(0, user1);
+    }
+
+    function test_sweepUnclaimed_revert_zeroAddress() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.warp(block.timestamp + 366 days);
+
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.ZeroAddress.selector);
+        claimContract.sweepUnclaimed(0, address(0));
+    }
+
+    function test_sweepUnclaimed_revert_afterDeactivate() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        // Deactivate first
+        vm.prank(admin);
+        claimContract.deactivateRound(0);
+
+        // Now try to sweep — should revert since round is no longer active
+        vm.warp(block.timestamp + 366 days);
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.RoundNotActive.selector);
+        claimContract.sweepUnclaimed(0, admin);
+    }
+
+    function test_pause_revert_notAdmin() public {
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.pause();
+    }
+
+    function test_unpause_revert_notAdmin() public {
+        vm.prank(admin);
+        claimContract.pause();
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.unpause();
+    }
+
+    function test_transferAdmin_revert_notAdmin() public {
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.transferAdmin(user1);
+    }
+
+    function test_transferAdmin_revert_zeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.ZeroAddress.selector);
+        claimContract.transferAdmin(address(0));
+    }
+
+    function test_acceptAdmin_revert_notPending() public {
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.acceptAdmin();
+    }
+
+    // ─── Event Emission Tests ────────────────────────────────────────────
+
+    function test_event_RoundCreated() public {
+        bytes32 usdcRoot = bytes32(uint256(1));
+        bytes32 wethRoot = bytes32(uint256(2));
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.expectEmit(true, false, false, true);
+        emit StreamRecoveryClaim.RoundCreated(0, usdcRoot, wethRoot, 1000e6, 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(usdcRoot, wethRoot, 1000e6, 1e18);
+    }
+
+    function test_event_WaiverSigned() public {
+        vm.expectEmit(true, false, false, false);
+        emit StreamRecoveryClaim.WaiverSigned(user1);
+
+        _executeSignWaiver(user1Pk);
+    }
+
+    function test_event_UsdcClaimed() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves,) =
+            _setupRound(usdcShares, wethShares, 1000e6, 1e18);
+
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory proof = Merkle.getProof(usdcLeaves, 0);
+
+        vm.expectEmit(true, true, false, true);
+        emit StreamRecoveryClaim.UsdcClaimed(roundId, user1, 1000e6);
+
+        vm.prank(user1);
+        claimContract.claimUsdc(roundId, 1e18, proof);
+    }
+
+    function test_event_WethClaimed() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+
+        vm.expectEmit(true, true, false, true);
+        emit StreamRecoveryClaim.WethClaimed(roundId, user1, 2e18);
+
+        vm.prank(user1);
+        claimContract.claimWeth(roundId, 1e18, proof);
+    }
+
+    function test_event_RoundDeactivated() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.expectEmit(true, false, false, false);
+        emit StreamRecoveryClaim.RoundDeactivated(0);
+
+        vm.prank(admin);
+        claimContract.deactivateRound(0);
+    }
+
+    function test_event_UnclaimedSwept() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+
+        vm.expectEmit(true, false, false, true);
+        emit StreamRecoveryClaim.UnclaimedSwept(0, 1000e6, 1e18);
+
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(0, treasury);
+    }
+
+    function test_event_AdminTransferStarted() public {
+        address newAdmin = makeAddr("newAdmin");
+
+        vm.expectEmit(true, true, false, false);
+        emit StreamRecoveryClaim.AdminTransferStarted(admin, newAdmin);
+
+        vm.prank(admin);
+        claimContract.transferAdmin(newAdmin);
+    }
+
+    function test_event_AdminTransferred() public {
+        address newAdmin = makeAddr("newAdmin");
+
+        vm.prank(admin);
+        claimContract.transferAdmin(newAdmin);
+
+        vm.expectEmit(true, true, false, false);
+        emit StreamRecoveryClaim.AdminTransferred(admin, newAdmin);
+
+        vm.prank(newAdmin);
+        claimContract.acceptAdmin();
+    }
+
+    function test_event_Paused() public {
+        vm.expectEmit(true, false, false, false);
+        emit StreamRecoveryClaim.Paused(admin);
+
+        vm.prank(admin);
+        claimContract.pause();
+    }
+
+    function test_event_Unpaused() public {
+        vm.prank(admin);
+        claimContract.pause();
+
+        vm.expectEmit(true, false, false, false);
+        emit StreamRecoveryClaim.Unpaused(admin);
+
+        vm.prank(admin);
+        claimContract.unpause();
+    }
+
+    // ─── Invariant-style Tests ───────────────────────────────────────────
+
+    /// @dev totalAllocated must never exceed contract balance
+    function test_invariant_allocatedNeverExceedsBalance() public {
+        usdc.mint(address(claimContract), 3000e6);
+        weth.mint(address(claimContract), 6e18);
+
+        // Create 3 rounds
+        vm.startPrank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 2e18);
+        claimContract.createRound(bytes32(uint256(3)), bytes32(uint256(4)), 1000e6, 2e18);
+        claimContract.createRound(bytes32(uint256(5)), bytes32(uint256(6)), 1000e6, 2e18);
+        vm.stopPrank();
+
+        assertEq(claimContract.totalUsdcAllocated(), 3000e6);
+        assertEq(claimContract.totalWethAllocated(), 6e18);
+
+        // Invariant: allocated <= balance
+        assertLe(claimContract.totalUsdcAllocated(), usdc.balanceOf(address(claimContract)));
+        assertLe(claimContract.totalWethAllocated(), weth.balanceOf(address(claimContract)));
+
+        // Deactivate round 1 — should reduce allocation
+        vm.prank(admin);
+        claimContract.deactivateRound(1);
+
+        assertEq(claimContract.totalUsdcAllocated(), 2000e6);
+        assertLe(claimContract.totalUsdcAllocated(), usdc.balanceOf(address(claimContract)));
+        assertLe(claimContract.totalWethAllocated(), weth.balanceOf(address(claimContract)));
+    }
+
+    /// @dev claimed must never exceed total for any round (4 users, power-of-2 tree)
+    function test_invariant_claimedNeverExceedsTotal() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](4);
+        usdcShares[0] = UsdcShare(user1, 0.25e18);
+        usdcShares[1] = UsdcShare(user2, 0.25e18);
+        usdcShares[2] = UsdcShare(user3, 0.25e18);
+        usdcShares[3] = UsdcShare(user4, 0.25e18);
+
+        WethShare[] memory wethShares = new WethShare[](4);
+        wethShares[0] = WethShare(user1, 0.25e18);
+        wethShares[1] = WethShare(user2, 0.25e18);
+        wethShares[2] = WethShare(user3, 0.25e18);
+        wethShares[3] = WethShare(user4, 0.25e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 4e18);
+
+        _executeSignWaiver(user1Pk);
+        _executeSignWaiver(user2Pk);
+        _executeSignWaiver(user3Pk);
+        _executeSignWaiver(user4Pk);
+
+        // user1 claims
+        vm.prank(user1);
+        claimContract.claimBoth(
+            roundId,
+            0.25e18,
+            Merkle.getProof(usdcLeaves, 0),
+            0.25e18,
+            Merkle.getProof(wethLeaves, 0)
+        );
+
+        (,,, , uint256 usdcClaimed1, uint256 wethClaimed1,,) = claimContract.rounds(roundId);
+        assertLe(usdcClaimed1, 1000e6);
+        assertLe(wethClaimed1, 4e18);
+
+        // user2 claims
+        vm.prank(user2);
+        claimContract.claimBoth(
+            roundId,
+            0.25e18,
+            Merkle.getProof(usdcLeaves, 1),
+            0.25e18,
+            Merkle.getProof(wethLeaves, 1)
+        );
+
+        (,,,, uint256 usdcClaimed2, uint256 wethClaimed2,,) = claimContract.rounds(roundId);
+        assertLe(usdcClaimed2, 1000e6);
+        assertLe(wethClaimed2, 4e18);
+
+        // user3 claims
+        vm.prank(user3);
+        claimContract.claimBoth(
+            roundId,
+            0.25e18,
+            Merkle.getProof(usdcLeaves, 2),
+            0.25e18,
+            Merkle.getProof(wethLeaves, 2)
+        );
+
+        (,,,, uint256 usdcClaimed3, uint256 wethClaimed3,,) = claimContract.rounds(roundId);
+        assertLe(usdcClaimed3, 1000e6);
+        assertLe(wethClaimed3, 4e18);
+
+        // user4 claims
+        vm.prank(user4);
+        claimContract.claimBoth(
+            roundId,
+            0.25e18,
+            Merkle.getProof(usdcLeaves, 3),
+            0.25e18,
+            Merkle.getProof(wethLeaves, 3)
+        );
+
+        (,,,, uint256 usdcClaimed4, uint256 wethClaimed4,,) = claimContract.rounds(roundId);
+        assertLe(usdcClaimed4, 1000e6);
+        assertLe(wethClaimed4, 4e18);
+
+        // All claimed — verify totals
+        uint256 totalUsdcUsers = usdc.balanceOf(user1) + usdc.balanceOf(user2)
+            + usdc.balanceOf(user3) + usdc.balanceOf(user4);
+        uint256 totalWethUsers = weth.balanceOf(user1) + weth.balanceOf(user2)
+            + weth.balanceOf(user3) + weth.balanceOf(user4);
+        assertEq(totalUsdcUsers, usdcClaimed4);
+        assertEq(totalWethUsers, wethClaimed4);
+    }
+
+    /// @dev Asset conservation: contract balance must decrease by exactly claimed amounts
+    function test_invariant_assetConservation() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](2);
+        usdcShares[0] = UsdcShare(user1, 0.6e18);
+        usdcShares[1] = UsdcShare(user2, 0.4e18);
+
+        WethShare[] memory wethShares = new WethShare[](2);
+        wethShares[0] = WethShare(user1, 0.6e18);
+        wethShares[1] = WethShare(user2, 0.4e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        uint256 usdcBefore = usdc.balanceOf(address(claimContract));
+        uint256 wethBefore = weth.balanceOf(address(claimContract));
+
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory usdcProof = Merkle.getProof(usdcLeaves, 0);
+        bytes32[] memory wethProof = Merkle.getProof(wethLeaves, 0);
+
+        vm.prank(user1);
+        claimContract.claimBoth(roundId, 0.6e18, usdcProof, 0.6e18, wethProof);
+
+        uint256 usdcAfter = usdc.balanceOf(address(claimContract));
+        uint256 wethAfter = weth.balanceOf(address(claimContract));
+
+        // Contract lost exactly what user1 gained
+        assertEq(usdcBefore - usdcAfter, usdc.balanceOf(user1));
+        assertEq(wethBefore - wethAfter, weth.balanceOf(user1));
+
+        // Sweep remaining
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(roundId, treasury);
+
+        // All funds accounted for
+        assertEq(
+            usdc.balanceOf(user1) + usdc.balanceOf(treasury),
+            usdcBefore
+        );
+        assertEq(
+            weth.balanceOf(user1) + weth.balanceOf(treasury),
+            wethBefore
+        );
     }
 }
