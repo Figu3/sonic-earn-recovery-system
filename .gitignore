@@ -17,3 +17,7 @@ scripts/output/
 # Env
 .env
 .env.*
+
+# Build / coverage artifacts
+lcov.info
+foundry.lock

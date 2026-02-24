@@ -990,22 +990,28 @@ contract StreamRecoveryClaimTest is Test {
         claimContract.sweepUnclaimed(0, address(0));
     }
 
-    function test_sweepUnclaimed_revert_afterDeactivate() public {
+    function test_sweepUnclaimed_afterDeactivate() public {
         usdc.mint(address(claimContract), 1000e6);
         weth.mint(address(claimContract), 1e18);
 
         vm.prank(admin);
         claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
 
-        // Deactivate first
+        // Deactivate first — releases allocation
         vm.prank(admin);
         claimContract.deactivateRound(0);
+        assertEq(claimContract.totalUsdcAllocated(), 0);
+        assertEq(claimContract.totalWethAllocated(), 0);
 
-        // Now try to sweep — should revert since round is no longer active
+        // Sweep past deadline — should succeed and transfer the tokens
         vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
         vm.prank(admin);
-        vm.expectRevert(StreamRecoveryClaim.RoundNotActive.selector);
-        claimContract.sweepUnclaimed(0, admin);
+        claimContract.sweepUnclaimed(0, treasury);
+
+        assertEq(usdc.balanceOf(treasury), 1000e6);
+        assertEq(weth.balanceOf(treasury), 1e18);
+        assertTrue(claimContract.swept(0));
     }
 
     function test_pause_revert_notAdmin() public {
@@ -1293,6 +1299,212 @@ contract StreamRecoveryClaimTest is Test {
         assertEq(totalWethUsers, wethClaimed4);
     }
 
+    // ─── Sweep: Double-Sweep Prevention ─────────────────────────────────
+
+    function test_sweepUnclaimed_revert_alreadySwept() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(0, treasury);
+
+        // Second sweep should revert
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.AlreadySwept.selector);
+        claimContract.sweepUnclaimed(0, treasury);
+    }
+
+    // ─── Sweep: Deactivate then sweep with partial claims ─────────────
+
+    function test_sweepUnclaimed_afterDeactivate_partialClaim() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](2);
+        usdcShares[0] = UsdcShare(user1, 0.6e18);
+        usdcShares[1] = UsdcShare(user2, 0.4e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves,) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        // user1 claims USDC (60%)
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory proof = Merkle.getProof(usdcLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimUsdc(roundId, 0.6e18, proof);
+
+        // Deactivate
+        vm.prank(admin);
+        claimContract.deactivateRound(roundId);
+
+        // Sweep past deadline — should transfer only unclaimed portions
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(roundId, treasury);
+
+        // user1 got 600 USDC, treasury gets remaining 400 USDC + 2 WETH
+        assertEq(usdc.balanceOf(user1), 600e6);
+        assertEq(usdc.balanceOf(treasury), 400e6);
+        assertEq(weth.balanceOf(treasury), 2e18);
+    }
+
+    // ─── Rescue Token ────────────────────────────────────────────────────
+
+    function test_rescueToken_excessUsdc() public {
+        usdc.mint(address(claimContract), 2000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        // Allocate 1000 USDC in a round
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        // Rescue the 1000 excess USDC
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.rescueToken(address(usdc), treasury, 1000e6);
+
+        assertEq(usdc.balanceOf(treasury), 1000e6);
+        // Allocated funds remain
+        assertEq(usdc.balanceOf(address(claimContract)), 1000e6);
+    }
+
+    function test_rescueToken_excessWeth() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 5e18);
+
+        // Allocate 2 WETH in a round
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 2e18);
+
+        // Rescue the 3 excess WETH
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.rescueToken(address(weth), treasury, 3e18);
+
+        assertEq(weth.balanceOf(treasury), 3e18);
+        assertEq(weth.balanceOf(address(claimContract)), 2e18);
+    }
+
+    function test_rescueToken_otherToken() public {
+        ERC20Mock randomToken = new ERC20Mock("Random", "RND", 18);
+        randomToken.mint(address(claimContract), 100e18);
+
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.rescueToken(address(randomToken), treasury, 100e18);
+
+        assertEq(randomToken.balanceOf(treasury), 100e18);
+        assertEq(randomToken.balanceOf(address(claimContract)), 0);
+    }
+
+    function test_rescueToken_revert_exceedsRescuableUsdc() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        // Try to rescue allocated USDC — should revert
+        vm.prank(admin);
+        vm.expectRevert("Exceeds rescuable USDC");
+        claimContract.rescueToken(address(usdc), admin, 1);
+    }
+
+    function test_rescueToken_revert_exceedsRescuableWeth() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        // Try to rescue allocated WETH — should revert
+        vm.prank(admin);
+        vm.expectRevert("Exceeds rescuable WETH");
+        claimContract.rescueToken(address(weth), admin, 1);
+    }
+
+    function test_rescueToken_revert_notAdmin() public {
+        usdc.mint(address(claimContract), 1000e6);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.rescueToken(address(usdc), user1, 1000e6);
+    }
+
+    function test_rescueToken_revert_zeroAddress() public {
+        usdc.mint(address(claimContract), 1000e6);
+
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.ZeroAddress.selector);
+        claimContract.rescueToken(address(usdc), address(0), 1000e6);
+    }
+
+    function test_event_TokenRescued() public {
+        ERC20Mock randomToken = new ERC20Mock("Random", "RND", 18);
+        randomToken.mint(address(claimContract), 50e18);
+
+        address treasury = makeAddr("treasury");
+
+        vm.expectEmit(true, true, false, true);
+        emit StreamRecoveryClaim.TokenRescued(address(randomToken), treasury, 50e18);
+
+        vm.prank(admin);
+        claimContract.rescueToken(address(randomToken), treasury, 50e18);
+    }
+
+    // ─── Batch Claim: Bounds Check ───────────────────────────────────────
+
+    function test_claimMultipleUsdc_revert_emptyArray() public {
+        _executeSignWaiver(user1Pk);
+
+        uint256[] memory roundIds = new uint256[](0);
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NoRounds.selector);
+        claimContract.claimMultipleUsdc(roundIds, 0.5e18, proof);
+    }
+
+    function test_claimMultipleWeth_revert_emptyArray() public {
+        _executeSignWaiver(user1Pk);
+
+        uint256[] memory roundIds = new uint256[](0);
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NoRounds.selector);
+        claimContract.claimMultipleWeth(roundIds, 0.5e18, proof);
+    }
+
+    function test_claimMultipleUsdc_revert_tooManyRounds() public {
+        _executeSignWaiver(user1Pk);
+
+        uint256[] memory roundIds = new uint256[](51);
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.TooManyRounds.selector);
+        claimContract.claimMultipleUsdc(roundIds, 0.5e18, proof);
+    }
+
+    function test_claimMultipleWeth_revert_tooManyRounds() public {
+        _executeSignWaiver(user1Pk);
+
+        uint256[] memory roundIds = new uint256[](51);
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.TooManyRounds.selector);
+        claimContract.claimMultipleWeth(roundIds, 0.5e18, proof);
+    }
+
     /// @dev Asset conservation: contract balance must decrease by exactly claimed amounts
     function test_invariant_assetConservation() public {
         UsdcShare[] memory usdcShares = new UsdcShare[](2);
@@ -1338,5 +1550,686 @@ contract StreamRecoveryClaimTest is Test {
             weth.balanceOf(user1) + weth.balanceOf(treasury),
             wethBefore
         );
+    }
+
+    // ─── P0 Fix: Zero Merkle Root Validation ─────────────────────────────
+
+    function test_createRound_revert_zeroUsdcMerkleRoot() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.ZeroMerkleRoot.selector);
+        claimContract.createRound(bytes32(0), bytes32(uint256(2)), 1000e6, 1e18);
+    }
+
+    function test_createRound_revert_zeroWethMerkleRoot() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.ZeroMerkleRoot.selector);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(0), 1000e6, 1e18);
+    }
+
+    function test_createRound_zeroRoot_allowed_when_zeroTotal() public {
+        // Zero root is fine when that token has zero allocation (e.g. USDC-only round)
+        usdc.mint(address(claimContract), 1000e6);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(0), 1000e6, 0);
+
+        (,,uint256 usdcTotal, uint256 wethTotal,,,,) = claimContract.rounds(0);
+        assertEq(usdcTotal, 1000e6);
+        assertEq(wethTotal, 0);
+    }
+
+    function test_createRound_bothZeroRoots_bothZeroTotals() public {
+        // Degenerate case: fully empty round (no funds)
+        vm.prank(admin);
+        claimContract.createRound(bytes32(0), bytes32(0), 0, 0);
+        assertEq(claimContract.roundCount(), 1);
+    }
+
+    // ─── P0 Fix: updateMerkleRoots ──────────────────────────────────────
+
+    function test_updateMerkleRoots_success() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        bytes32 newUsdcRoot = bytes32(uint256(10));
+        bytes32 newWethRoot = bytes32(uint256(20));
+
+        vm.prank(admin);
+        claimContract.updateMerkleRoots(0, newUsdcRoot, newWethRoot);
+
+        (bytes32 usdcRoot, bytes32 wethRoot,,,,,,) = claimContract.rounds(0);
+        assertEq(usdcRoot, newUsdcRoot);
+        assertEq(wethRoot, newWethRoot);
+    }
+
+    function test_updateMerkleRoots_emitsEvent() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        bytes32 newUsdcRoot = bytes32(uint256(10));
+        bytes32 newWethRoot = bytes32(uint256(20));
+
+        vm.expectEmit(true, false, false, true);
+        emit StreamRecoveryClaim.MerkleRootsUpdated(0, newUsdcRoot, newWethRoot);
+
+        vm.prank(admin);
+        claimContract.updateMerkleRoots(0, newUsdcRoot, newWethRoot);
+    }
+
+    function test_updateMerkleRoots_revert_notAdmin() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.NotAdmin.selector);
+        claimContract.updateMerkleRoots(0, bytes32(uint256(10)), bytes32(uint256(20)));
+    }
+
+    function test_updateMerkleRoots_revert_invalidRound() public {
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.InvalidRound.selector);
+        claimContract.updateMerkleRoots(0, bytes32(uint256(10)), bytes32(uint256(20)));
+    }
+
+    function test_updateMerkleRoots_revert_deactivatedRound() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.startPrank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+        claimContract.deactivateRound(0);
+
+        vm.expectRevert(StreamRecoveryClaim.RoundNotActive.selector);
+        claimContract.updateMerkleRoots(0, bytes32(uint256(10)), bytes32(uint256(20)));
+        vm.stopPrank();
+    }
+
+    function test_updateMerkleRoots_revert_afterClaims() public {
+        // Setup a round with real Merkle trees
+        UsdcShare[] memory usdcShares = new UsdcShare[](2);
+        usdcShares[0] = UsdcShare(user1, 0.5e18);
+        usdcShares[1] = UsdcShare(user2, 0.5e18);
+
+        WethShare[] memory wethShares = new WethShare[](2);
+        wethShares[0] = WethShare(user1, 0.5e18);
+        wethShares[1] = WethShare(user2, 0.5e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves,) =
+            _setupRound(usdcShares, wethShares, 1000e6, 1e18);
+
+        // User1 claims USDC
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory proof = Merkle.getProof(usdcLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimUsdc(roundId, 0.5e18, proof);
+
+        // Now admin cannot update roots
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.RoundHasClaims.selector);
+        claimContract.updateMerkleRoots(roundId, bytes32(uint256(10)), bytes32(uint256(20)));
+    }
+
+    function test_updateMerkleRoots_revert_zeroUsdcRoot() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.ZeroMerkleRoot.selector);
+        claimContract.updateMerkleRoots(0, bytes32(0), bytes32(uint256(20)));
+    }
+
+    function test_updateMerkleRoots_revert_zeroWethRoot() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.ZeroMerkleRoot.selector);
+        claimContract.updateMerkleRoots(0, bytes32(uint256(10)), bytes32(0));
+    }
+
+    function test_updateMerkleRoots_thenClaimWithNewRoot() public {
+        // Setup round with initial roots
+        UsdcShare[] memory usdcShares = new UsdcShare[](2);
+        usdcShares[0] = UsdcShare(user1, 0.6e18);
+        usdcShares[1] = UsdcShare(user2, 0.4e18);
+
+        WethShare[] memory wethShares = new WethShare[](2);
+        wethShares[0] = WethShare(user1, 0.7e18);
+        wethShares[1] = WethShare(user2, 0.3e18);
+
+        // Build new trees (the "corrected" ones)
+        bytes32[] memory newUsdcLeaves = new bytes32[](2);
+        newUsdcLeaves[0] = _createLeaf(user1, 0.6e18);
+        newUsdcLeaves[1] = _createLeaf(user2, 0.4e18);
+
+        bytes32[] memory newWethLeaves = new bytes32[](2);
+        newWethLeaves[0] = _createLeaf(user1, 0.7e18);
+        newWethLeaves[1] = _createLeaf(user2, 0.3e18);
+
+        bytes32 newUsdcRoot = Merkle.getRoot(newUsdcLeaves);
+        bytes32 newWethRoot = Merkle.getRoot(newWethLeaves);
+
+        // Fund and create round with WRONG roots
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(999)), bytes32(uint256(888)), 1000e6, 1e18);
+
+        // Update to correct roots
+        vm.prank(admin);
+        claimContract.updateMerkleRoots(0, newUsdcRoot, newWethRoot);
+
+        // Now user1 can claim with the new roots
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory usdcProof = Merkle.getProof(newUsdcLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimUsdc(0, 0.6e18, usdcProof);
+
+        assertEq(usdc.balanceOf(user1), 600e6);
+    }
+
+    // ─── P1 Fix: AlreadySigned Guard ────────────────────────────────────
+
+    function test_signWaiver_revert_alreadySigned() public {
+        _executeSignWaiver(user1Pk);
+        assertTrue(claimContract.hasSignedWaiver(user1));
+
+        // Signing again should revert
+        (uint8 v, bytes32 r, bytes32 s) = _signWaiver(user1Pk);
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.AlreadySigned.selector);
+        claimContract.signWaiver(v, r, s);
+    }
+
+    // ─── Branch Coverage: canClaimUsdc view early returns ─────────────
+
+    function test_canClaimUsdc_invalidRoundId() public {
+        // roundId >= roundCount → (false, 0)
+        bytes32[] memory proof = new bytes32[](0);
+        (bool eligible, uint256 amount) = claimContract.canClaimUsdc(999, user1, 0.5e18, proof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    function test_canClaimUsdc_deactivatedRound() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.prank(admin);
+        claimContract.deactivateRound(0);
+
+        bytes32[] memory proof = new bytes32[](0);
+        (bool eligible, uint256 amount) = claimContract.canClaimUsdc(0, user1, 0.5e18, proof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    function test_canClaimUsdc_invalidProof() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 0.5e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId,,) = _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+        _executeSignWaiver(user1Pk);
+
+        // Use empty proof (wrong)
+        bytes32[] memory badProof = new bytes32[](1);
+        badProof[0] = bytes32(uint256(0xdead));
+        (bool eligible, uint256 amount) = claimContract.canClaimUsdc(roundId, user1, 0.5e18, badProof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    // ─── Branch Coverage: canClaimWeth view early returns ─────────────
+
+    function test_canClaimWeth_invalidRoundId() public {
+        bytes32[] memory proof = new bytes32[](0);
+        (bool eligible, uint256 amount) = claimContract.canClaimWeth(999, user1, 0.5e18, proof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    function test_canClaimWeth_deactivatedRound() public {
+        usdc.mint(address(claimContract), 1000e6);
+        weth.mint(address(claimContract), 1e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 1000e6, 1e18);
+
+        vm.prank(admin);
+        claimContract.deactivateRound(0);
+
+        bytes32[] memory proof = new bytes32[](0);
+        (bool eligible, uint256 amount) = claimContract.canClaimWeth(0, user1, 0.5e18, proof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    function test_canClaimWeth_invalidProof() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 0.5e18);
+
+        (uint256 roundId,,) = _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+        _executeSignWaiver(user1Pk);
+
+        bytes32[] memory badProof = new bytes32[](1);
+        badProof[0] = bytes32(uint256(0xdead));
+        (bool eligible, uint256 amount) = claimContract.canClaimWeth(roundId, user1, 0.5e18, badProof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    function test_canClaimWeth_alreadyClaimed() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) = _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+        _executeSignWaiver(user1Pk);
+
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+
+        // Claim first
+        vm.prank(user1);
+        claimContract.claimWeth(roundId, 1e18, proof);
+
+        // canClaimWeth should now return false
+        (bool eligible, uint256 amount) = claimContract.canClaimWeth(roundId, user1, 1e18, proof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    function test_canClaimWeth_noWaiver() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 0.5e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) = _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+        (bool eligible, uint256 amount) = claimContract.canClaimWeth(roundId, user1, 0.5e18, proof);
+        assertFalse(eligible);
+        assertEq(amount, 0);
+    }
+
+    // ─── Branch Coverage: ClaimExceedsTotal ──────────────────────────
+
+    function test_claimUsdc_revert_claimExceedsTotal() public {
+        // Create a malicious tree where shares sum > 100%
+        // user1: 60%, user2: 60% → total 120%
+        UsdcShare[] memory usdcShares = new UsdcShare[](2);
+        usdcShares[0] = UsdcShare(user1, 0.6e18);
+        usdcShares[1] = UsdcShare(user2, 0.6e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves,) =
+            _setupRound(usdcShares, wethShares, 1000e6, 1e18);
+
+        _executeSignWaiver(user1Pk);
+        _executeSignWaiver(user2Pk);
+
+        // user1 claims 60% = 600 USDC (OK, 600 <= 1000)
+        bytes32[] memory proof1 = Merkle.getProof(usdcLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimUsdc(roundId, 0.6e18, proof1);
+        assertEq(usdc.balanceOf(user1), 600e6);
+
+        // user2 claims 60% = 600 USDC → claimed (600+600=1200 > 1000) → REVERT
+        bytes32[] memory proof2 = Merkle.getProof(usdcLeaves, 1);
+        vm.prank(user2);
+        vm.expectRevert(StreamRecoveryClaim.ClaimExceedsTotal.selector);
+        claimContract.claimUsdc(roundId, 0.6e18, proof2);
+    }
+
+    function test_claimWeth_revert_claimExceedsTotal() public {
+        // Malicious tree where WETH shares sum > 100%
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](2);
+        wethShares[0] = WethShare(user1, 0.7e18);
+        wethShares[1] = WethShare(user2, 0.7e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        _executeSignWaiver(user1Pk);
+        _executeSignWaiver(user2Pk);
+
+        // user1 claims 70% = 1.4 WETH (OK, 1.4 <= 2)
+        bytes32[] memory proof1 = Merkle.getProof(wethLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimWeth(roundId, 0.7e18, proof1);
+        assertEq(weth.balanceOf(user1), 1.4e18);
+
+        // user2 claims 70% = 1.4 WETH → claimed (1.4+1.4=2.8 > 2) → REVERT
+        bytes32[] memory proof2 = Merkle.getProof(wethLeaves, 1);
+        vm.prank(user2);
+        vm.expectRevert(StreamRecoveryClaim.ClaimExceedsTotal.selector);
+        claimContract.claimWeth(roundId, 0.7e18, proof2);
+    }
+
+    // ─── Branch Coverage: Zero-share claims (amount = 0, no transfer) ─
+
+    function test_claimUsdc_zeroShareWad() public {
+        // User has 0 share — valid proof but amount = 0, no transfer
+        UsdcShare[] memory usdcShares = new UsdcShare[](2);
+        usdcShares[0] = UsdcShare(user1, 0);       // 0% share
+        usdcShares[1] = UsdcShare(user2, 1e18);    // 100% share
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves,) =
+            _setupRound(usdcShares, wethShares, 1000e6, 1e18);
+
+        _executeSignWaiver(user1Pk);
+
+        bytes32[] memory proof = Merkle.getProof(usdcLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimUsdc(roundId, 0, proof);
+
+        // Claim recorded but zero amount transferred
+        assertTrue(claimContract.hasClaimedUsdc(roundId, user1));
+        assertEq(usdc.balanceOf(user1), 0);
+    }
+
+    function test_claimWeth_zeroShareWad() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](2);
+        wethShares[0] = WethShare(user1, 0);       // 0% WETH share
+        wethShares[1] = WethShare(user2, 1e18);    // 100% share
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        _executeSignWaiver(user1Pk);
+
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimWeth(roundId, 0, proof);
+
+        assertTrue(claimContract.hasClaimedWeth(roundId, user1));
+        assertEq(weth.balanceOf(user1), 0);
+    }
+
+    // ─── Branch Coverage: sweepUnclaimed with zero-remaining ─────────
+
+    function test_sweepUnclaimed_allUsdcClaimed_wethUnclaimed() public {
+        // All USDC claimed (usdcRemaining = 0), WETH unclaimed (wethRemaining > 0)
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves,) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        _executeSignWaiver(user1Pk);
+
+        // Claim all USDC but NOT WETH
+        bytes32[] memory proof = Merkle.getProof(usdcLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimUsdc(roundId, 1e18, proof);
+
+        assertEq(usdc.balanceOf(user1), 1000e6);
+
+        // Warp past deadline and sweep
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(roundId, treasury);
+
+        // Treasury gets 0 USDC (all claimed) + 2 WETH (unclaimed)
+        assertEq(usdc.balanceOf(treasury), 0);
+        assertEq(weth.balanceOf(treasury), 2e18);
+    }
+
+    function test_sweepUnclaimed_allWethClaimed_usdcUnclaimed() public {
+        // WETH fully claimed, USDC unclaimed
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        _executeSignWaiver(user1Pk);
+
+        // Claim all WETH but NOT USDC
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimWeth(roundId, 1e18, proof);
+
+        assertEq(weth.balanceOf(user1), 2e18);
+
+        // Warp past deadline and sweep
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(roundId, treasury);
+
+        // Treasury gets 1000 USDC (unclaimed) + 0 WETH (all claimed)
+        assertEq(usdc.balanceOf(treasury), 1000e6);
+        assertEq(weth.balanceOf(treasury), 0);
+    }
+
+    function test_sweepUnclaimed_allClaimed_nothingToSweep() public {
+        // Both tokens fully claimed — sweep transfers nothing
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId, bytes32[] memory usdcLeaves, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        _executeSignWaiver(user1Pk);
+
+        // Claim everything
+        bytes32[] memory usdcProof = Merkle.getProof(usdcLeaves, 0);
+        bytes32[] memory wethProof = Merkle.getProof(wethLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimBoth(roundId, 1e18, usdcProof, 1e18, wethProof);
+
+        // Warp past deadline and sweep
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(roundId, treasury);
+
+        // Nothing swept
+        assertEq(usdc.balanceOf(treasury), 0);
+        assertEq(weth.balanceOf(treasury), 0);
+        assertTrue(claimContract.swept(roundId));
+    }
+
+    // ─── Branch Coverage: updateMerkleRoots after WETH-only claim ────
+
+    function test_updateMerkleRoots_revert_afterWethClaims() public {
+        // Ensure the wethClaimed > 0 branch of the RoundHasClaims check is hit
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 1e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) =
+            _setupRound(usdcShares, wethShares, 1000e6, 2e18);
+
+        // User1 claims only WETH (not USDC)
+        _executeSignWaiver(user1Pk);
+        bytes32[] memory wethProof = Merkle.getProof(wethLeaves, 0);
+        vm.prank(user1);
+        claimContract.claimWeth(roundId, 1e18, wethProof);
+
+        // Admin cannot update roots (wethClaimed > 0 even though usdcClaimed == 0)
+        vm.prank(admin);
+        vm.expectRevert(StreamRecoveryClaim.RoundHasClaims.selector);
+        claimContract.updateMerkleRoots(roundId, bytes32(uint256(10)), bytes32(uint256(20)));
+    }
+
+    // ─── Branch Coverage: createRound zero WETH root with zero USDC total ─
+
+    function test_createRound_wethOnlyRound_zeroUsdcRoot() public {
+        // WETH-only round: zero USDC root is fine when usdcTotal = 0
+        weth.mint(address(claimContract), 5e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(0), bytes32(uint256(1)), 0, 5e18);
+
+        (bytes32 usdcRoot,, uint256 usdcTotal, uint256 wethTotal,,,,) = claimContract.rounds(0);
+        assertEq(usdcRoot, bytes32(0));
+        assertEq(usdcTotal, 0);
+        assertEq(wethTotal, 5e18);
+    }
+
+    // ─── Branch Coverage: updateMerkleRoots zero roots with zero totals ──
+
+    function test_updateMerkleRoots_zeroUsdcRoot_zeroUsdcTotal() public {
+        // When usdcTotal = 0, zero USDC root is acceptable
+        weth.mint(address(claimContract), 2e18);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(0), bytes32(uint256(1)), 0, 2e18);
+
+        // Update: zero USDC root stays OK since usdcTotal = 0
+        vm.prank(admin);
+        claimContract.updateMerkleRoots(0, bytes32(0), bytes32(uint256(99)));
+
+        (bytes32 usdcRoot, bytes32 wethRoot,,,,,,) = claimContract.rounds(0);
+        assertEq(usdcRoot, bytes32(0));
+        assertEq(wethRoot, bytes32(uint256(99)));
+    }
+
+    function test_updateMerkleRoots_zeroWethRoot_zeroWethTotal() public {
+        // When wethTotal = 0, zero WETH root is acceptable
+        usdc.mint(address(claimContract), 1000e6);
+
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(0), 1000e6, 0);
+
+        // Update: zero WETH root stays OK since wethTotal = 0
+        vm.prank(admin);
+        claimContract.updateMerkleRoots(0, bytes32(uint256(99)), bytes32(0));
+
+        (bytes32 usdcRoot, bytes32 wethRoot,,,,,,) = claimContract.rounds(0);
+        assertEq(usdcRoot, bytes32(uint256(99)));
+        assertEq(wethRoot, bytes32(0));
+    }
+
+    // ─── Branch Coverage: sweepUnclaimed on already-deactivated round skips allocation release ─
+
+    function test_sweepUnclaimed_deactivatedRound_skipsAllocationRelease() public {
+        // Create and immediately deactivate round 0 (no claims)
+        usdc.mint(address(claimContract), 500e6);
+        weth.mint(address(claimContract), 1e18);
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(1)), bytes32(uint256(2)), 500e6, 1e18);
+        assertEq(claimContract.totalUsdcAllocated(), 500e6);
+        assertEq(claimContract.totalWethAllocated(), 1e18);
+
+        // Deactivate round 0 → releases full allocation
+        vm.prank(admin);
+        claimContract.deactivateRound(0);
+        assertEq(claimContract.totalUsdcAllocated(), 0);
+        assertEq(claimContract.totalWethAllocated(), 0);
+
+        // Create round 1 using freed capacity (tokens still in contract)
+        vm.prank(admin);
+        claimContract.createRound(bytes32(uint256(11)), bytes32(uint256(22)), 500e6, 1e18);
+        assertEq(claimContract.totalUsdcAllocated(), 500e6);
+        assertEq(claimContract.totalWethAllocated(), 1e18);
+
+        // Sweep round 0 past deadline — round is already deactivated,
+        // so sweep should NOT subtract from allocation again
+        vm.warp(block.timestamp + 366 days);
+        address treasury = makeAddr("treasury");
+        vm.prank(admin);
+        claimContract.sweepUnclaimed(0, treasury);
+
+        // Round 1 allocation should be completely unaffected
+        assertEq(claimContract.totalUsdcAllocated(), 500e6);
+        assertEq(claimContract.totalWethAllocated(), 1e18);
+    }
+
+    // ─── Branch Coverage: WETH claim invalid proof ──────────────────
+
+    function test_claimWeth_revert_invalidProof() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](2);
+        wethShares[0] = WethShare(user1, 0.6e18);
+        wethShares[1] = WethShare(user2, 0.4e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) = _setupRound(usdcShares, wethShares, 800e6, 2e18);
+        _executeSignWaiver(user1Pk);
+
+        // Use proof for user2 but claim as user1
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 1);
+
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.InvalidProof.selector);
+        claimContract.claimWeth(roundId, 0.6e18, proof);
+    }
+
+    function test_claimWeth_revert_wrongShare() public {
+        UsdcShare[] memory usdcShares = new UsdcShare[](1);
+        usdcShares[0] = UsdcShare(user1, 1e18);
+
+        WethShare[] memory wethShares = new WethShare[](1);
+        wethShares[0] = WethShare(user1, 0.5e18);
+
+        (uint256 roundId,, bytes32[] memory wethLeaves) = _setupRound(usdcShares, wethShares, 500e6, 1e18);
+        _executeSignWaiver(user1Pk);
+
+        bytes32[] memory proof = Merkle.getProof(wethLeaves, 0);
+
+        // Try to claim with inflated share
+        vm.prank(user1);
+        vm.expectRevert(StreamRecoveryClaim.InvalidProof.selector);
+        claimContract.claimWeth(roundId, 0.9e18, proof);
     }
 }

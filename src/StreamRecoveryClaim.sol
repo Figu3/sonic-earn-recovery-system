@@ -39,6 +39,7 @@ contract StreamRecoveryClaim is EIP712 {
         "I confirm that I am authorized to claim on behalf of this wallet or account.";
 
     uint256 public constant CLAIM_DEADLINE_DURATION = 365 days;
+    uint256 public constant MAX_BATCH_SIZE = 50;
 
     // ─── Storage ────────────────────────────────────────────────────────
     address public admin;
@@ -77,6 +78,9 @@ contract StreamRecoveryClaim is EIP712 {
     /// @notice user => has signed the waiver
     mapping(address => bool) public hasSignedWaiver;
 
+    /// @notice roundId => has been swept
+    mapping(uint256 => bool) public swept;
+
     bool public paused;
 
     // ─── Events ─────────────────────────────────────────────────────────
@@ -96,6 +100,8 @@ contract StreamRecoveryClaim is EIP712 {
     event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
     event Paused(address indexed by);
     event Unpaused(address indexed by);
+    event TokenRescued(address indexed token, address indexed to, uint256 amount);
+    event MerkleRootsUpdated(uint256 indexed roundId, bytes32 usdcMerkleRoot, bytes32 wethMerkleRoot);
 
     // ─── Errors ─────────────────────────────────────────────────────────
     error NotAdmin();
@@ -110,6 +116,12 @@ contract StreamRecoveryClaim is EIP712 {
     error InvalidSignature();
     error InsufficientBalance();
     error ClaimExceedsTotal();
+    error AlreadySwept();
+    error TooManyRounds();
+    error ZeroMerkleRoot();
+    error AlreadySigned();
+    error RoundHasClaims();
+    error InvalidRound();
 
     // ─── Modifiers ──────────────────────────────────────────────────────
     modifier onlyAdmin() {
@@ -150,6 +162,10 @@ contract StreamRecoveryClaim is EIP712 {
         uint256 usdcTotal,
         uint256 wethTotal
     ) external onlyAdmin {
+        // Reject zero Merkle roots when tokens are allocated
+        if (usdcTotal > 0 && usdcMerkleRoot == bytes32(0)) revert ZeroMerkleRoot();
+        if (wethTotal > 0 && wethMerkleRoot == bytes32(0)) revert ZeroMerkleRoot();
+
         // Track cumulative allocation and verify contract holds enough tokens
         totalUsdcAllocated += usdcTotal;
         totalWethAllocated += wethTotal;
@@ -189,6 +205,32 @@ contract StreamRecoveryClaim is EIP712 {
         emit RoundDeactivated(roundId);
     }
 
+    /// @notice Update Merkle roots for a round that has zero claims.
+    ///         Allows admin to fix wrong or swapped roots before any user claims.
+    /// @param roundId The round to update.
+    /// @param usdcMerkleRoot The new USDC Merkle root.
+    /// @param wethMerkleRoot The new WETH Merkle root.
+    function updateMerkleRoots(
+        uint256 roundId,
+        bytes32 usdcMerkleRoot,
+        bytes32 wethMerkleRoot
+    ) external onlyAdmin {
+        if (roundId >= roundCount) revert InvalidRound();
+
+        Round storage round = rounds[roundId];
+        if (!round.active) revert RoundNotActive();
+        if (round.usdcClaimed > 0 || round.wethClaimed > 0) revert RoundHasClaims();
+
+        // Reject zero roots when tokens are allocated
+        if (round.usdcTotal > 0 && usdcMerkleRoot == bytes32(0)) revert ZeroMerkleRoot();
+        if (round.wethTotal > 0 && wethMerkleRoot == bytes32(0)) revert ZeroMerkleRoot();
+
+        round.usdcMerkleRoot = usdcMerkleRoot;
+        round.wethMerkleRoot = wethMerkleRoot;
+
+        emit MerkleRootsUpdated(roundId, usdcMerkleRoot, wethMerkleRoot);
+    }
+
     // ─── User: Waiver ───────────────────────────────────────────────────
 
     /// @notice Sign the liability waiver using EIP-712 typed data.
@@ -196,6 +238,8 @@ contract StreamRecoveryClaim is EIP712 {
     /// @param r Signature r component.
     /// @param s Signature s component.
     function signWaiver(uint8 v, bytes32 r, bytes32 s) external whenNotPaused {
+        if (hasSignedWaiver[msg.sender]) revert AlreadySigned();
+
         bytes32 structHash = keccak256(
             abi.encode(
                 WAIVER_TYPEHASH,
@@ -267,6 +311,8 @@ contract StreamRecoveryClaim is EIP712 {
         bytes32[] calldata proof
     ) external whenNotPaused {
         uint256 len = roundIds.length;
+        if (len == 0) revert NoRounds();
+        if (len > MAX_BATCH_SIZE) revert TooManyRounds();
         for (uint256 i; i < len; ++i) {
             _claimUsdc(roundIds[i], shareWad, proof);
         }
@@ -282,6 +328,8 @@ contract StreamRecoveryClaim is EIP712 {
         bytes32[] calldata proof
     ) external whenNotPaused {
         uint256 len = roundIds.length;
+        if (len == 0) revert NoRounds();
+        if (len > MAX_BATCH_SIZE) revert TooManyRounds();
         for (uint256 i; i < len; ++i) {
             _claimWeth(roundIds[i], shareWad, proof);
         }
@@ -354,25 +402,33 @@ contract StreamRecoveryClaim is EIP712 {
     // ─── Admin: Sweep Unclaimed ─────────────────────────────────────────
 
     /// @notice Sweep unclaimed funds after the claim deadline has passed.
+    ///         Works on both active and deactivated rounds.
     /// @param roundId The round to sweep.
     /// @param to Recipient of unclaimed funds.
     function sweepUnclaimed(uint256 roundId, address to) external onlyAdmin {
         if (to == address(0)) revert ZeroAddress();
+        if (swept[roundId]) revert AlreadySwept();
+
         Round storage round = rounds[roundId];
-        if (!round.active) revert RoundNotActive();
         if (block.timestamp < round.claimDeadline) revert DeadlineNotReached();
 
         uint256 usdcRemaining = round.usdcTotal - round.usdcClaimed;
         uint256 wethRemaining = round.wethTotal - round.wethClaimed;
 
-        // Mark round as fully claimed to prevent further claims
-        round.active = false;
+        // Mark as swept to prevent double-sweep
+        swept[roundId] = true;
+
+        // If round is still active, deactivate it and release allocation
+        if (round.active) {
+            round.active = false;
+            totalUsdcAllocated -= usdcRemaining;
+            totalWethAllocated -= wethRemaining;
+        }
+        // If already deactivated, allocation was already released by deactivateRound
+
+        // Mark round as fully claimed
         round.usdcClaimed = round.usdcTotal;
         round.wethClaimed = round.wethTotal;
-
-        // Release swept allocation
-        totalUsdcAllocated -= usdcRemaining;
-        totalWethAllocated -= wethRemaining;
 
         if (usdcRemaining > 0) {
             usdc.safeTransfer(to, usdcRemaining);
@@ -386,14 +442,44 @@ contract StreamRecoveryClaim is EIP712 {
 
     // ─── Admin: Emergency ───────────────────────────────────────────────
 
+    /// @notice Pause all user-facing claim operations. Only callable by admin.
+    /// @dev Sets `paused = true`, blocking `signWaiver`, `claimUsdc`, `claimWeth`,
+    ///      `claimBoth`, `claimMultipleUsdc`, and `claimMultipleWeth`.
     function pause() external onlyAdmin {
         paused = true;
         emit Paused(msg.sender);
     }
 
+    /// @notice Resume all user-facing claim operations after a pause. Only callable by admin.
     function unpause() external onlyAdmin {
         paused = false;
         emit Unpaused(msg.sender);
+    }
+
+    // ─── Admin: Rescue Tokens ────────────────────────────────────────────
+
+    /// @notice Rescue tokens accidentally sent to this contract.
+    ///         For USDC/WETH: only allows withdrawing the excess above totalAllocated.
+    ///         For other tokens: allows full withdrawal.
+    /// @param token The token to rescue.
+    /// @param to Recipient of rescued tokens.
+    /// @param amount Amount to rescue.
+    function rescueToken(address token, address to, uint256 amount) external onlyAdmin {
+        if (to == address(0)) revert ZeroAddress();
+
+        if (token == address(usdc)) {
+            uint256 excess = usdc.balanceOf(address(this)) - totalUsdcAllocated;
+            require(amount <= excess, "Exceeds rescuable USDC");
+            usdc.safeTransfer(to, amount);
+        } else if (token == address(weth)) {
+            uint256 excess = weth.balanceOf(address(this)) - totalWethAllocated;
+            require(amount <= excess, "Exceeds rescuable WETH");
+            weth.safeTransfer(to, amount);
+        } else {
+            IERC20(token).safeTransfer(to, amount);
+        }
+
+        emit TokenRescued(token, to, amount);
     }
 
     // ─── Admin: Transfer ────────────────────────────────────────────────
@@ -414,6 +500,12 @@ contract StreamRecoveryClaim is EIP712 {
     // ─── View ───────────────────────────────────────────────────────────
 
     /// @notice Check if a user can claim USDC from a specific round.
+    /// @param roundId The round to check.
+    /// @param user The address to check eligibility for.
+    /// @param shareWad The pro-rata share (WAD) to verify.
+    /// @param proof Merkle proof against the USDC tree.
+    /// @return eligible True if the user can claim right now.
+    /// @return amount The USDC amount the user would receive.
     function canClaimUsdc(
         uint256 roundId,
         address user,
@@ -434,6 +526,12 @@ contract StreamRecoveryClaim is EIP712 {
     }
 
     /// @notice Check if a user can claim WETH from a specific round.
+    /// @param roundId The round to check.
+    /// @param user The address to check eligibility for.
+    /// @param shareWad The pro-rata share (WAD) to verify.
+    /// @param proof Merkle proof against the WETH tree.
+    /// @return eligible True if the user can claim right now.
+    /// @return amount The WETH amount the user would receive.
     function canClaimWeth(
         uint256 roundId,
         address user,
@@ -454,11 +552,14 @@ contract StreamRecoveryClaim is EIP712 {
     }
 
     /// @notice Get the EIP-712 domain separator.
+    /// @return The EIP-712 domain separator hash.
     function domainSeparator() external view returns (bytes32) {
         return _domainSeparatorV4();
     }
 
     /// @notice Get the waiver digest that a user needs to sign.
+    /// @param claimant The address of the user who will sign.
+    /// @return The EIP-712 typed data hash to be signed.
     function getWaiverDigest(address claimant) external view returns (bytes32) {
         bytes32 structHash = keccak256(
             abi.encode(
