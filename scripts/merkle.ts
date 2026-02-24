@@ -58,6 +58,85 @@ const PROTOCOL_REDIRECTS: Record<string, { target: string; label: string }> = {
     target: "0x65ef8fd6168a4bc2cfebf83b0c83a8a9b7aad1f9",
     label: "Spectra sw-wstkscETH (1 holder)",
   },
+  // dLEND → single dLEND distribution address
+  "0xd6bbab428240c6a4e093e13802f2eca3e9f0de7d": {
+    target: "0x4e260eDF7f736A62Cc36c828B0C7470b33a681Ac",
+    label: "dLEND wstkscUSD",
+  },
+  "0x10451579fd6375c8bee09f1e2c5831afde9003ed": {
+    target: "0x4e260eDF7f736A62Cc36c828B0C7470b33a681Ac",
+    label: "dLEND wstkscUSD (Silo)",
+  },
+  "0xf0c5f8b8715d2e54415079c5a520af5ab8858c75": {
+    target: "0x4e260eDF7f736A62Cc36c828B0C7470b33a681Ac",
+    label: "dLEND wstkscETH",
+  },
+  // Pendle SY → single Pendle distribution address
+  "0x896f4d49916ac5cfc36d7a260a7039ba4ea317b6": {
+    target: "0xC328dFcD2C8450e2487a91daa9B75629075b7A43",
+    label: "Pendle SY-wstkscUSD",
+  },
+  "0x8bb86a99f97f5d19718bd5ca0b0ca00354532ef3": {
+    target: "0xC328dFcD2C8450e2487a91daa9B75629075b7A43",
+    label: "Pendle SY-wstkscETH",
+  },
+  // Royco Weiroll wallets → their depositor addresses (14 active wallets in snapshot)
+  "0x4d75d997b8f4c9fa9417202ef333cfee599496bc": {
+    target: "0x30ef7087862f3c99242efc9633394eae629d6e9d",
+    label: "Royco Weiroll → depositor",
+  },
+  "0xc71a94935c0be2621728b4959ace6686e85e9f70": {
+    target: "0x1c1732e19d016f20f59ade301375b1572a0981c2",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x18573f4983e0ae137a6167fe9c67d0e3cb339db5": {
+    target: "0xa161f191de22191bbb83f6d9f6ba1b702425a173",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x325c51df3b427c4b8620633bde2e5e7c1b635782": {
+    target: "0x95c9b6b5d9b93bdf823526b46d0abc4c6adcdb83",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x0b89b50de40accba24d463010ce9141ad7bf6c2b": {
+    target: "0xc25687cf9c5fdcad9ca418c9be09540b11d2ef46",
+    label: "Royco Weiroll → depositor",
+  },
+  "0xb55fa7434b0daa3ae22735464f8783d4d28c71d9": {
+    target: "0xc6404f24db2f573f07f3a60758765caad198c0c3",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x9099f045611f091e20a78a164af730dbc49b5f3b": {
+    target: "0x7f6914d8d27dd810cc1f4575f5722492b999a54f",
+    label: "Royco Weiroll → depositor",
+  },
+  "0xc18c27aaf17be2d83bbc17c1fdec5b05e62a4cc0": {
+    target: "0x10b9f7a1435f2486324dcf6a930cfc64332a43bc",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x95600ee18096fd41d56ca619c230e59819a1e970": {
+    target: "0x478bb542f7658d635abba67edb987806dff5b83d",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x119d69120c9940a9d8ee78a35f865d39bf08a622": {
+    target: "0x110b099f023aed984009265752866bd6ad9a459a",
+    label: "Royco Weiroll → depositor",
+  },
+  "0xe0c4a018c3b8d30188a318ad557140a06458aae7": {
+    target: "0x007048da7c4c54c4b02db949eb83c7367c1c59fd",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x57b01e0bc2589f6bb14fba12112e5fb00468bab6": {
+    target: "0x50e26bade4e2a15f7f46148e3c36e8cf11937da5",
+    label: "Royco Weiroll → depositor",
+  },
+  "0xcbce33689057e96ab7b2158f0b2b2d73019149b1": {
+    target: "0xf71e9ec4d7015bf50dfbe12a23d5a6071167b06e",
+    label: "Royco Weiroll → depositor",
+  },
+  "0x4116a9df14c8fbab03fba45173aa3ce126d24a8c": {
+    target: "0x7cb552152e2b28f9f6911c51b69b0d8d1fadafe1",
+    label: "Royco Weiroll → depositor",
+  },
 };
 
 // ─── Protocol Sub-Distributions ───────────────────────────────────────
@@ -125,6 +204,30 @@ const PROTOCOL_SUB_DISTRIBUTIONS: Record<string, SubDistribution> = {
       { address: "0xa71a705c620ff8ddff7f5144800613469d5838bb", balanceWei: "1041970558417" },
       { address: "0x19f29007707989212d19d7687fb29ead1338f006", balanceWei: "464809760" },
       { address: "0x4a07034856aeb680d517aba6cb532724ce1265be", balanceWei: "9611541" },
+    ],
+  },
+  // Royco Sonic USDC — 15 active depositors (non-withdrawn positions from CSV)
+  // Main Royco RecipeMarketHub contract holds stkscUSD for active positions.
+  // Weights are original USDC deposit amounts (token_0_amount, 6 decimals).
+  "0x45088fb2ffebfdcf4dff7b7201bfa4cd2077c30e": {
+    label: "Royco Sonic USDC",
+    totalLiquidity: "1708852035",
+    holders: [
+      { address: "0xea012d5ab5c24a6f33e0fa5b2839320b35e15437", balanceWei: "1000000000" },
+      { address: "0x7f6914d8d27dd810cc1f4575f5722492b999a54f", balanceWei: "571160000" },
+      { address: "0x30ef7087862f3c99242efc9633394eae629d6e9d", balanceWei: "30100000" },
+      { address: "0x110b099f023aed984009265752866bd6ad9a459a", balanceWei: "25970000" },
+      { address: "0x7cb552152e2b28f9f6911c51b69b0d8d1fadafe1", balanceWei: "20470000" },
+      { address: "0x95c9b6b5d9b93bdf823526b46d0abc4c6adcdb83", balanceWei: "20000000" },
+      { address: "0x1c1732e19d016f20f59ade301375b1572a0981c2", balanceWei: "18560000" },
+      { address: "0x50e26bade4e2a15f7f46148e3c36e8cf11937da5", balanceWei: "10530000" },
+      { address: "0xf71e9ec4d7015bf50dfbe12a23d5a6071167b06e", balanceWei: "10000000" },
+      { address: "0xa161f191de22191bbb83f6d9f6ba1b702425a173", balanceWei: "1000000" },
+      { address: "0xc25687cf9c5fdcad9ca418c9be09540b11d2ef46", balanceWei: "1000000" },
+      { address: "0x10b9f7a1435f2486324dcf6a930cfc64332a43bc", balanceWei: "50000" },
+      { address: "0xc6404f24db2f573f07f3a60758765caad198c0c3", balanceWei: "10000" },
+      { address: "0x478bb542f7658d635abba67edb987806dff5b83d", balanceWei: "8" },
+      { address: "0x007048da7c4c54c4b02db949eb83c7367c1c59fd", balanceWei: "5" },
     ],
   },
 };

@@ -6,7 +6,7 @@
  * wstkscUSD/wstkscETH via ERC20 pro-rata, withdraw queues),
  * and outputs an entitlement list.
  *
- * Third-party protocol contracts (Silo, Pendle, Euler, dLEND, Morpho,
+ * Third-party protocol contracts (Silo, Pendle, Euler, dLEND,
  * Spectra, Royco, AMM pools) that hold wstksc tokens will appear in
  * the output with their pro-rata share of the underlying stksc.
  * Each protocol handles sub-distribution to their depositors.
@@ -72,7 +72,7 @@ const PROTOCOL_LABELS: Record<string, string> = {
   "0x10451579fd6375c8bee09f1e2c5831afde9003ed": "dLEND wstkscUSD",
   "0x64fcc3a02eeeba05ef701b7eed066c6ebd5d4e51": "Spectra sw-wstkscETH",
   "0x45088fb2ffebfdcf4dff7b7201bfa4cd2077c30e": "Royco Sonic USDC",
-  "0xd6bbab428240c6a4e093e13802f2eca3e9f0de7d": "Morpho Blue",
+  "0xd6bbab428240c6a4e093e13802f2eca3e9f0de7d": "dLEND wstkscUSD",
   "0xa1a0ecccd628a70434221e3e5f832517e97a697c": "StakeDAO Curve wstkscUSD",
   "0x05cf0c7ed39fc2ed0bd4397716ebb02f74ff25b5": "Shadow CL wstkscETH (negligible)",
   "0x286cc998298d9d0242c9ad30cdb587e0b2f59f22": "Shadow CL stkscETH (negligible)",
