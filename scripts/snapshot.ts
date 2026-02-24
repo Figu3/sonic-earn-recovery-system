@@ -73,8 +73,9 @@ const PROTOCOL_LABELS: Record<string, string> = {
   "0x64fcc3a02eeeba05ef701b7eed066c6ebd5d4e51": "Spectra sw-wstkscETH",
   "0x45088fb2ffebfdcf4dff7b7201bfa4cd2077c30e": "Royco Sonic USDC",
   "0xd6bbab428240c6a4e093e13802f2eca3e9f0de7d": "Morpho Blue",
-  "0x05cf0c7ed39fc2ed0bd4397716ebb02f74ff25b5": "CL Pool wstkscETH",
-  "0x286cc998298d9d0242c9ad30cdb587e0b2f59f22": "CL Pool stkscETH",
+  "0xa1a0ecccd628a70434221e3e5f832517e97a697c": "StakeDAO Curve wstkscUSD",
+  "0x05cf0c7ed39fc2ed0bd4397716ebb02f74ff25b5": "Shadow CL wstkscETH (negligible)",
+  "0x286cc998298d9d0242c9ad30cdb587e0b2f59f22": "Shadow CL stkscETH (negligible)",
   "0xfb9f97e08f6bdca19353cacaf3e542e461686041": "9mm V2 LP",
 };
 

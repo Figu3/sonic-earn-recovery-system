@@ -60,6 +60,75 @@ const PROTOCOL_REDIRECTS: Record<string, { target: string; label: string }> = {
   },
 };
 
+// ─── Protocol Sub-Distributions ───────────────────────────────────────
+// Protocol contracts whose balance should be split among their underlying
+// depositors/LP holders pro-rata. Each holder gets:
+//   holderBalance / totalLiquidity  ×  contractSnapshotBalance
+//
+// Data sourced from lp-holders.json (block 63643578).
+//
+// NOTE: Shadow CL Pools (0x05cf…wstkscETH, 0x286c…stkscETH) are NOT
+// sub-distributed: 0 LP holders found, negligible token balances
+// (~$1,500 combined, <0.01% of recovery). They remain as unclaimed dust.
+
+interface SubDistHolder {
+  address: string;
+  balanceWei: string;
+}
+
+interface SubDistribution {
+  label: string;
+  totalLiquidity: string;
+  holders: SubDistHolder[];
+}
+
+const PROTOCOL_SUB_DISTRIBUTIONS: Record<string, SubDistribution> = {
+  // StakeDAO Curve wstkscUSD — 8 LP holders (block 63643578)
+  // Contract holds wstkscUSD in a Curve StableSwap pool
+  "0xa1a0ecccd628a70434221e3e5f832517e97a697c": {
+    label: "StakeDAO Curve wstkscUSD",
+    totalLiquidity: "5356424869016069636703",
+    holders: [
+      { address: "0xc17703c3932aa68e567ff172b55af64f963127b1", balanceWei: "5319407574631076903134" },
+      { address: "0x52f541764e6e90eebc5c21ff570de0e2d63766b6", balanceWei: "17043349486928037644" },
+      { address: "0x968e55af69f9f60abcc231a5a84d8a559ffb6cac", balanceWei: "15109245291089895353" },
+      { address: "0x078ef0ba848ee19750daf6f06ab1af3add271efe", balanceWei: "4116774185219423158" },
+      { address: "0x6faaa9071bb5b1c0ff5d37846391f6f388a7f622", balanceWei: "603127160836047132" },
+      { address: "0xeda49bce2f38d284f839be1f4f2e23e6c7cc7dbd", balanceWei: "127180171484074237" },
+      { address: "0xd39b2a01d4dca42f32ff52244a1b28811e40045f", balanceWei: "17569060444705917" },
+      { address: "0xcd60153384818fdcb5ee9f549ffbff4fccbd037e", balanceWei: "49028990550128" },
+    ],
+  },
+  // Euler ewstkscETH-1 — 20 vault depositors (block 63643578)
+  // ERC-4626 vault holding wstkscETH
+  "0x05d57366b862022f76fe93316e81e9f24218bbfc": {
+    label: "Euler ewstkscETH-1",
+    totalLiquidity: "42100898052356702192",
+    holders: [
+      { address: "0xa4c63a2e8d0556ddb36c6544625284c663642384", balanceWei: "17495136574287911811" },
+      { address: "0xa4c63a2e8d0556ddb36c6544625284c663642385", balanceWei: "13047983382745749807" },
+      { address: "0xa4c63a2e8d0556ddb36c6544625284c663642381", balanceWei: "10716109817947532063" },
+      { address: "0xa0a3640ef3a68d2579d30d78247bc613f45f94a9", balanceWei: "495372063210291337" },
+      { address: "0xa781538006b07b856eb3d8b01c3d8d87382cb8f5", balanceWei: "340648688566542091" },
+      { address: "0x4ea8dc2b1c36ad392169965e73bde7781dc050ad", balanceWei: "2054863957664606" },
+      { address: "0xb672ea44a1ec692a9baf851dc90a1ee3db25f1c4", balanceWei: "1748968237442891" },
+      { address: "0x7945620c7365ca601dbacf8f4c3e3bb678071c1b", balanceWei: "676617023512148" },
+      { address: "0xd0f9c63cebc70884d63ed41851c9482305c5fee2", balanceWei: "467686541759791" },
+      { address: "0x3b93a553da6afd7f1c11b85a9c87a8f9657c0301", balanceWei: "315200131769083" },
+      { address: "0xa4c63a2e8d0556ddb36c6544625284c663642383", balanceWei: "99999618926696" },
+      { address: "0x60583f22ada7b1352bb2faf694b3eaaf942696dd", balanceWei: "97212565102367" },
+      { address: "0x50de2fb5cd259c1b99dbd3bb4e7aac76be7288fc", balanceWei: "64589335218530" },
+      { address: "0x7841708ee45e96464bbd5ec53f2f0b5671e720c2", balanceWei: "38191802533686" },
+      { address: "0x993d50b5f5c1259496b6cd419ef209bb9ff2b75d", balanceWei: "38050824122584" },
+      { address: "0x027090f33876291f05833029611dd9932471afa2", balanceWei: "32149617702286" },
+      { address: "0x5dd2cab9e6bb3a67e6415bd5d978e76e81544891", balanceWei: "12953497940697" },
+      { address: "0xa71a705c620ff8ddff7f5144800613469d5838bb", balanceWei: "1041970558417" },
+      { address: "0x19f29007707989212d19d7687fb29ead1338f006", balanceWei: "464809760" },
+      { address: "0x4a07034856aeb680d517aba6cb532724ce1265be", balanceWei: "9611541" },
+    ],
+  },
+};
+
 // ─── Types ─────────────────────────────────────────────────────────────
 
 interface SnapshotEntry {
@@ -314,21 +383,76 @@ function main() {
   console.log(`   stkscUSD totalSupply: ${usdTotalSupply}`);
   console.log(`   stkscETH totalSupply: ${ethTotalSupply}`);
 
-  // ── Apply protocol redirects ──────────────────────────────────────────
-  // Replace contract addresses with their designated recipients, merging
-  // balances when multiple contracts map to the same target.
+  // ── Apply protocol redirects & sub-distributions ──────────────────────
+  // 1. Sub-distributions: contract balance split pro-rata among LP/vault holders
+  // 2. Redirects: contract balance sent to a single designated recipient
+  // Balances from multiple sources mapping to the same address are merged.
 
-  console.log(`\n🔀 Applying protocol redirects...`);
+  console.log(`\n🔀 Applying protocol redirects & sub-distributions...`);
 
   const redirectedEntitlements: SnapshotEntry[] = [];
   const mergedBalances: Record<string, { usd: bigint; eth: bigint; sources: string[] }> = {};
   let redirectCount = 0;
+  let subDistCount = 0;
+  const subDistHolders = new Set<string>();
 
   for (const entry of snapshot.entitlements) {
     const addrLower = entry.address.toLowerCase();
+    const subDist = PROTOCOL_SUB_DISTRIBUTIONS[addrLower];
     const redirect = PROTOCOL_REDIRECTS[addrLower];
 
-    if (redirect) {
+    if (subDist) {
+      // ── Sub-distribute: split balance among LP/vault holders ──
+      subDistCount++;
+      const usdBal = BigInt(entry.stkscUSD_balance);
+      const ethBal = BigInt(entry.stkscETH_balance);
+      const totalLiq = BigInt(subDist.totalLiquidity);
+
+      console.log(`   📤 ${subDist.label} (${entry.address})`);
+      if (usdBal > 0n) console.log(`     stkscUSD: ${Number(usdBal) / 1e6} → ${subDist.holders.length} holders`);
+      if (ethBal > 0n) console.log(`     stkscETH: ${Number(ethBal) / 1e18} → ${subDist.holders.length} holders`);
+
+      let usdDistributed = 0n;
+      let ethDistributed = 0n;
+
+      for (const holder of subDist.holders) {
+        const holderBal = BigInt(holder.balanceWei);
+        const holderLower = holder.address.toLowerCase();
+
+        // Pro-rata share of each token balance
+        const holderUsd = totalLiq > 0n ? (usdBal * holderBal) / totalLiq : 0n;
+        const holderEth = totalLiq > 0n ? (ethBal * holderBal) / totalLiq : 0n;
+
+        usdDistributed += holderUsd;
+        ethDistributed += holderEth;
+
+        if (holderUsd > 0n || holderEth > 0n) {
+          if (!mergedBalances[holderLower]) {
+            mergedBalances[holderLower] = { usd: 0n, eth: 0n, sources: [] };
+          }
+          mergedBalances[holderLower].usd += holderUsd;
+          mergedBalances[holderLower].eth += holderEth;
+          if (!mergedBalances[holderLower].sources.includes(subDist.label)) {
+            mergedBalances[holderLower].sources.push(subDist.label);
+          }
+          subDistHolders.add(holderLower);
+        }
+      }
+
+      // Assign rounding dust to the largest holder (first in list)
+      const usdDust = usdBal - usdDistributed;
+      const ethDust = ethBal - ethDistributed;
+      if (usdDust > 0n || ethDust > 0n) {
+        const largestLower = subDist.holders[0].address.toLowerCase();
+        if (!mergedBalances[largestLower]) {
+          mergedBalances[largestLower] = { usd: 0n, eth: 0n, sources: [] };
+        }
+        mergedBalances[largestLower].usd += usdDust;
+        mergedBalances[largestLower].eth += ethDust;
+        console.log(`     Dust: +${usdDust} USD +${ethDust} ETH → largest holder`);
+      }
+    } else if (redirect) {
+      // ── Simple redirect: entire balance → single target ──
       redirectCount++;
       const targetLower = redirect.target.toLowerCase();
       const usdBal = BigInt(entry.stkscUSD_balance);
@@ -350,7 +474,7 @@ function main() {
     }
   }
 
-  // Check if any redirect targets already exist as holders and merge
+  // Merge all redirect/sub-distribution targets into the final entries list
   for (const [targetLower, merged] of Object.entries(mergedBalances)) {
     const existingIdx = redirectedEntitlements.findIndex(
       (e) => e.address.toLowerCase() === targetLower
@@ -370,7 +494,7 @@ function main() {
       };
       console.log(`   ⚡ Merged into existing holder ${existing.address} (${merged.sources.join(" + ")})`);
     } else {
-      // New entry for the redirect target
+      // New entry for the redirect/sub-distribution target
       const targetAddr = getAddress(targetLower) as string;
       redirectedEntitlements.push({
         address: targetAddr,
@@ -383,7 +507,8 @@ function main() {
     }
   }
 
-  console.log(`   Redirected ${redirectCount} protocol contracts → ${Object.keys(mergedBalances).length} target(s)`);
+  console.log(`   Redirected ${redirectCount} protocol contracts → single targets`);
+  console.log(`   Sub-distributed ${subDistCount} protocol contracts → ${subDistHolders.size} unique holders`);
   console.log(`   Entries: ${snapshot.entitlements.length} → ${redirectedEntitlements.length}`);
 
   // ── Compute per-user shares ──────────────────────────────────────────
