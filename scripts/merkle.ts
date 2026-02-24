@@ -146,9 +146,11 @@ const PROTOCOL_REDIRECTS: Record<string, { target: string; label: string }> = {
 //
 // Data sourced from lp-holders.json (block 63643578).
 //
-// NOTE: Shadow CL Pools (0x05cf…wstkscETH, 0x286c…stkscETH) are NOT
-// sub-distributed: 0 LP holders found, negligible token balances
-// (~$1,500 combined, <0.01% of recovery). They remain as unclaimed dust.
+// NOTE: The following protocol contracts are NOT redirected or sub-distributed
+// due to negligible balances (<0.01% of recovery). They remain as unclaimed dust:
+//   - Shadow CL wstkscETH (0x05cf…): ~$1,226
+//   - Shadow CL stkscETH (0x286c…): ~$308
+//   - 9mm V2 LP (0xfb9f…): ~$141 (0.056 stkscETH)
 
 interface SubDistHolder {
   address: string;

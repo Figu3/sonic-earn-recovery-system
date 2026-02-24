@@ -77,6 +77,8 @@ const PROTOCOL_LABELS: Record<string, string> = {
   "0x05cf0c7ed39fc2ed0bd4397716ebb02f74ff25b5": "Shadow CL wstkscETH (negligible)",
   "0x286cc998298d9d0242c9ad30cdb587e0b2f59f22": "Shadow CL stkscETH (negligible)",
   "0xfb9f97e08f6bdca19353cacaf3e542e461686041": "9mm V2 LP",
+  "0x6328a2ff2e6bb164f1be2479af209a88295f54d5": "Eliteness/GuruDAO ThenaAdapter (claims directly)",
+  "0xb0c855a7fb3716ebc1c4505218de4bf2186125ba": "Eliteness/GuruDAO Equalizer (claims directly)",
 };
 
 // ─── ABIs ──────────────────────────────────────────────────────────────
