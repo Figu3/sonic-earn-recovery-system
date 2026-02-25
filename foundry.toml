@@ -8,3 +8,11 @@ remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "forge-std/=lib/forge-std/src/",
 ]
+
+# Sonic chain RPC
+[rpc_endpoints]
+sonic = "${SONIC_RPC_URL}"
+
+# SonicScan verification (Etherscan V2 API)
+[etherscan]
+sonic = { key = "${SONICSCAN_API_KEY}", chain = 146, url = "https://api.etherscan.io/v2/api?chainid=146" }

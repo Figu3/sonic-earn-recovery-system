@@ -148,14 +148,46 @@ cast send <CONTRACT> "sweepUnclaimed(uint256,address)" \
 
 ---
 
+## Deployment & Verification
+
+### Deploy + Auto-Verify
+```bash
+source .env && forge script script/Deploy.s.sol \
+  --rpc-url sonic \
+  --broadcast \
+  --verify \
+  --private-key $PRIVATE_KEY
+```
+
+### Verify an Already-Deployed Contract
+```bash
+forge verify-contract <DEPLOYED_ADDRESS> StreamRecoveryClaim \
+  --chain 146 \
+  --verifier etherscan \
+  --verifier-url "https://api.etherscan.io/v2/api?chainid=146" \
+  --etherscan-api-key $SONICSCAN_API_KEY \
+  --constructor-args $(cast abi-encode "constructor(address,address,address)" $ADMIN $USDC $WETH) \
+  --watch
+```
+
+### Post-Deployment Checklist
+- [ ] Contract verified on [SonicScan](https://sonicscan.org) (green checkmark on contract tab)
+- [ ] Update contract address in this document (below)
+- [ ] Update contract registry (`contracts.json`)
+- [ ] Fund contract with USDC + WETH for first round
+- [ ] Create first distribution round via `createRound()`
+- [ ] Announce deployment address on Discord
+
+---
+
 ## Contract Addresses (To Be Filled Post-Deployment)
 
 | Contract | Address | Chain |
 |---|---|---|
-| StreamRecoveryClaim | `TBD` | Sonic |
+| StreamRecoveryClaim | `0x155F8e841505d4Be029938647b509639eAFe6c87` | Sonic |
 | USDC | `0x29219dd400f2Bf60E5a23d13Be72B486D4038894` | Sonic |
 | WETH | `0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38` | Sonic |
-| Admin (Safe) | `TBD` | Sonic |
+| Admin | `0x0792dCb7080466e4Bbc678Bdb873FE7D969832B8` | Sonic |
 
 ## Communication Channels
 

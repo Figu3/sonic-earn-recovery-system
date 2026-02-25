@@ -17,6 +17,7 @@ scripts/output/
 # Env
 .env
 .env.*
+!.env.example
 
 # Build / coverage artifacts
 lcov.info
