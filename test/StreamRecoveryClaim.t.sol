@@ -306,14 +306,15 @@ contract StreamRecoveryClaimTest is Test {
         vm.prank(user1);
         claimContract.claimUsdc(roundId, 0.6e18, proof);
 
-        assertEq(claimContract.totalUsdcAllocated(), 1000e6);
+        // After claim, allocation decremented by claimed amount
+        assertEq(claimContract.totalUsdcAllocated(), 400e6);
 
-        // Deactivate — should only release unclaimed portion
+        // Deactivate — should release unclaimed portion
         vm.prank(admin);
         claimContract.deactivateRound(roundId);
 
-        // 600 USDC was claimed, 400 released; 2 WETH was unclaimed, 2 released
-        assertEq(claimContract.totalUsdcAllocated(), 600e6);
+        // 600 USDC already decremented on claim, 400 released on deactivate; 2 WETH released
+        assertEq(claimContract.totalUsdcAllocated(), 0);
         assertEq(claimContract.totalWethAllocated(), 0);
     }
 
@@ -1003,14 +1004,15 @@ contract StreamRecoveryClaimTest is Test {
         assertEq(claimContract.totalUsdcAllocated(), 0);
         assertEq(claimContract.totalWethAllocated(), 0);
 
-        // Sweep past deadline — should succeed and transfer the tokens
+        // Sweep past deadline — totals zeroed on deactivation, so sweep transfers 0
         vm.warp(block.timestamp + 366 days);
         address treasury = makeAddr("treasury");
         vm.prank(admin);
         claimContract.sweepUnclaimed(0, treasury);
 
-        assertEq(usdc.balanceOf(treasury), 1000e6);
-        assertEq(weth.balanceOf(treasury), 1e18);
+        // Deactivation zeroed round totals; tokens recoverable via rescueToken
+        assertEq(usdc.balanceOf(treasury), 0);
+        assertEq(weth.balanceOf(treasury), 0);
         assertTrue(claimContract.swept(0));
     }
 
@@ -1343,16 +1345,16 @@ contract StreamRecoveryClaimTest is Test {
         vm.prank(admin);
         claimContract.deactivateRound(roundId);
 
-        // Sweep past deadline — should transfer only unclaimed portions
+        // Sweep past deadline — totals zeroed on deactivation, so sweep transfers 0
         vm.warp(block.timestamp + 366 days);
         address treasury = makeAddr("treasury");
         vm.prank(admin);
         claimContract.sweepUnclaimed(roundId, treasury);
 
-        // user1 got 600 USDC, treasury gets remaining 400 USDC + 2 WETH
+        // user1 got 600 USDC; deactivation zeroed round totals, sweep transfers 0
         assertEq(usdc.balanceOf(user1), 600e6);
-        assertEq(usdc.balanceOf(treasury), 400e6);
-        assertEq(weth.balanceOf(treasury), 2e18);
+        assertEq(usdc.balanceOf(treasury), 0);
+        assertEq(weth.balanceOf(treasury), 0);
     }
 
     // ─── Rescue Token ────────────────────────────────────────────────────

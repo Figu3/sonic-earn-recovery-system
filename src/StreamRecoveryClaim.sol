@@ -7,9 +7,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-/// @title StreamRecoveryClaim
+/// @title Trevee Earn Recovery Distributor (StreamRecoveryClaim)
 /// @notice Distributes recovered assets from the Stream Trading incident to affected
-///         stkscUSD and stkscETH users on a pro-rata basis via Merkle proofs.
+///         Trevee Earn stkscUSD and stkscETH users on a pro-rata basis via Merkle proofs.
 /// @dev Uses TWO separate Merkle trees per round — one for USDC shares and one for WETH
 ///      shares. Each leaf encodes: keccak256(bytes.concat(keccak256(abi.encode(address, shareWad)))).
 ///      This allows ~85% of users (USDC-only) to claim without touching the WETH tree,
@@ -202,6 +202,10 @@ contract StreamRecoveryClaim is EIP712 {
         totalUsdcAllocated -= usdcUnclaimed;
         totalWethAllocated -= wethUnclaimed;
 
+        // Zero out sweepable amount so sweep cannot drain tokens freed for reuse
+        round.usdcTotal = round.usdcClaimed;
+        round.wethTotal = round.wethClaimed;
+
         emit RoundDeactivated(roundId);
     }
 
@@ -359,6 +363,7 @@ contract StreamRecoveryClaim is EIP712 {
         // Effects
         hasClaimedUsdc[roundId][msg.sender] = true;
         round.usdcClaimed += amount;
+        totalUsdcAllocated -= amount;
 
         // Interactions
         if (amount > 0) {
@@ -390,6 +395,7 @@ contract StreamRecoveryClaim is EIP712 {
         // Effects
         hasClaimedWeth[roundId][msg.sender] = true;
         round.wethClaimed += amount;
+        totalWethAllocated -= amount;
 
         // Interactions
         if (amount > 0) {
@@ -406,6 +412,7 @@ contract StreamRecoveryClaim is EIP712 {
     /// @param roundId The round to sweep.
     /// @param to Recipient of unclaimed funds.
     function sweepUnclaimed(uint256 roundId, address to) external onlyAdmin {
+        if (roundId >= roundCount) revert InvalidRound();
         if (to == address(0)) revert ZeroAddress();
         if (swept[roundId]) revert AlreadySwept();
 
@@ -512,6 +519,7 @@ contract StreamRecoveryClaim is EIP712 {
         uint256 shareWad,
         bytes32[] calldata proof
     ) external view returns (bool eligible, uint256 amount) {
+        if (paused) return (false, 0);
         if (roundId >= roundCount) return (false, 0);
         Round storage round = rounds[roundId];
         if (!round.active) return (false, 0);
@@ -538,6 +546,7 @@ contract StreamRecoveryClaim is EIP712 {
         uint256 shareWad,
         bytes32[] calldata proof
     ) external view returns (bool eligible, uint256 amount) {
+        if (paused) return (false, 0);
         if (roundId >= roundCount) return (false, 0);
         Round storage round = rounds[roundId];
         if (!round.active) return (false, 0);

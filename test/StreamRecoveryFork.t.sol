@@ -6,7 +6,7 @@ import {StreamRecoveryClaim} from "../src/StreamRecoveryClaim.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Merkle} from "./utils/Merkle.sol";
 
-/// @title Fork integration test against Sonic mainnet
+/// @title Fork integration test for Trevee Earn Recovery Distributor against Sonic mainnet
 /// @dev Run with: forge test --match-contract StreamRecoveryForkTest --fork-url $SONIC_RPC -vvv
 ///      Requires SONIC_RPC env var pointing to a Sonic chain RPC endpoint.
 ///      Validates the contract works correctly with real on-chain USDC and WETH tokens.

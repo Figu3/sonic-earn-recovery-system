@@ -1,6 +1,6 @@
-# Stream Recovery Claim System
+# Trevee Earn Recovery Distributor
 
-Merkle-proof-based distribution contract for recovering assets from the Stream Trading incident affecting Trevee's stkscUSD and stkscETH vaults on Sonic chain.
+Merkle-proof-based distribution contract for recovering assets from the Stream Trading incident affecting Trevee Earn's stkscUSD and stkscETH vaults on Sonic chain.
 
 ## Architecture
 

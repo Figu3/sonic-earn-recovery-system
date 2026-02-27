@@ -180,14 +180,14 @@ forge verify-contract <DEPLOYED_ADDRESS> StreamRecoveryClaim \
 
 ---
 
-## Contract Addresses (To Be Filled Post-Deployment)
+## Contract Addresses
 
 | Contract | Address | Chain |
 |---|---|---|
 | StreamRecoveryClaim | `0x155F8e841505d4Be029938647b509639eAFe6c87` | Sonic |
 | USDC | `0x29219dd400f2Bf60E5a23d13Be72B486D4038894` | Sonic |
 | WETH | `0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38` | Sonic |
-| Admin | `0x0792dCb7080466e4Bbc678Bdb873FE7D969832B8` | Sonic |
+| Admin (Safe) | `0x0792dcB7080466e4Bbc678BDb873FE7D969832B8` | Sonic |
 
 ## Communication Channels
 

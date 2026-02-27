@@ -109,7 +109,7 @@ contract TestnetE2E is Script {
         user5 = vm.addr(USER5_PK);
 
         console2.log("=========================================");
-        console2.log("  StreamRecoveryClaim Testnet E2E");
+        console2.log("  Trevee Earn Recovery Distributor - Testnet E2E");
         console2.log("=========================================");
         console2.log("");
 

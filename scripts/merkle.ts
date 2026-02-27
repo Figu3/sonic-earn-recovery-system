@@ -709,7 +709,7 @@ function main() {
   console.log(`   WETH CSV: ${wethCsvPath} (${byWethShare.length} rows)`);
 
   console.log(`\n📋 How to use:`);
-  console.log(`   1. Deploy StreamRecoveryClaim(admin, usdc, weth)`);
+  console.log(`   1. Deploy Trevee Earn Recovery Distributor: StreamRecoveryClaim(admin, usdc, weth)`);
   console.log(`   2. Fund contract with USDC + WETH for this round`);
   console.log(`   3. Call createRound(${usdcResult.root}, ${wethResult.root}, usdcTotal, wethTotal)`);
   console.log(`   4. USDC holders call claimUsdc(roundId, shareWad, proof)`);

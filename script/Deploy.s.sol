@@ -4,7 +4,7 @@ pragma solidity 0.8.24;
 import {Script, console2} from "forge-std/Script.sol";
 import {StreamRecoveryClaim} from "../src/StreamRecoveryClaim.sol";
 
-/// @title Deploy StreamRecoveryClaim
+/// @title Deploy Trevee Earn Recovery Distributor (StreamRecoveryClaim)
 /// @notice Deploy + verify on Sonic:
 ///
 ///   source .env && forge script script/Deploy.s.sol \

@@ -6,7 +6,7 @@ import {StreamRecoveryClaim} from "../src/StreamRecoveryClaim.sol";
 import {ERC20Mock} from "./mocks/ERC20Mock.sol";
 import {Merkle} from "./utils/Merkle.sol";
 
-/// @title Fuzz tests for StreamRecoveryClaim numeric functions
+/// @title Fuzz tests for Trevee Earn Recovery Distributor (StreamRecoveryClaim)
 /// @dev Targets payout computation, allocation tracking, and share/total boundaries.
 contract StreamRecoveryFuzzTest is Test {
     StreamRecoveryClaim public claim;
