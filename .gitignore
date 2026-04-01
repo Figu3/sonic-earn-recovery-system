@@ -8,8 +8,11 @@ broadcast/
 # Node
 scripts/node_modules/
 
-# Snapshot output (contains sensitive holder data)
-scripts/output/
+# Snapshot output (large files excluded, merkle trees tracked for verification)
+scripts/output/*
+!scripts/output/merkle-usdc.json
+!scripts/output/merkle-weth.json
+!scripts/output/snapshot-63645527.json
 
 # OS
 .DS_Store
