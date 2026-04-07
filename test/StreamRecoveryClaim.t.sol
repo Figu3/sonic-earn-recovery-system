@@ -34,7 +34,7 @@ contract StreamRecoveryClaimTest is Test {
         usdc = new ERC20Mock("USD Coin", "USDC", 6);
         weth = new ERC20Mock("Wrapped Ether", "WETH", 18);
 
-        claimContract = new StreamRecoveryClaim(admin, address(usdc), address(weth));
+        claimContract = new StreamRecoveryClaim(admin, address(usdc), address(weth), address(0));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────
@@ -117,17 +117,17 @@ contract StreamRecoveryClaimTest is Test {
 
     function test_constructor_revert_zeroAdmin() public {
         vm.expectRevert(StreamRecoveryClaim.ZeroAddress.selector);
-        new StreamRecoveryClaim(address(0), address(usdc), address(weth));
+        new StreamRecoveryClaim(address(0), address(usdc), address(weth), address(0));
     }
 
     function test_constructor_revert_zeroUsdc() public {
         vm.expectRevert(StreamRecoveryClaim.ZeroAddress.selector);
-        new StreamRecoveryClaim(admin, address(0), address(weth));
+        new StreamRecoveryClaim(admin, address(0), address(weth), address(0));
     }
 
     function test_constructor_revert_zeroWeth() public {
         vm.expectRevert(StreamRecoveryClaim.ZeroAddress.selector);
-        new StreamRecoveryClaim(admin, address(usdc), address(0));
+        new StreamRecoveryClaim(admin, address(usdc), address(0), address(0));
     }
 
     // ─── Waiver ─────────────────────────────────────────────────────────

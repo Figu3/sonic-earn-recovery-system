@@ -49,7 +49,7 @@ contract StreamRecoveryForkTest is Test {
 
         // Only deploy when running on a fork (real tokens have bytecode)
         if (USDC_SONIC.code.length > 0) {
-            claim = new StreamRecoveryClaim(admin, USDC_SONIC, WETH_SONIC);
+            claim = new StreamRecoveryClaim(admin, USDC_SONIC, WETH_SONIC, address(0));
         }
     }
 

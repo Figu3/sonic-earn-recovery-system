@@ -23,19 +23,37 @@ import {StreamRecoveryClaim} from "../src/StreamRecoveryClaim.sol";
 ///     --constructor-args $(cast abi-encode "constructor(address,address,address)" $ADMIN $USDC $WETH) \
 ///     --watch
 contract DeployStreamRecoveryClaim is Script {
+    /// @dev Set expected chain ID to prevent deploying on the wrong network.
+    ///      Sonic = 146. Override via EXPECTED_CHAIN_ID env var if needed.
+    uint256 constant SONIC_CHAIN_ID = 146;
+
     function run() external {
+        uint256 expectedChainId = vm.envOr("EXPECTED_CHAIN_ID", SONIC_CHAIN_ID);
+        require(
+            block.chainid == expectedChainId,
+            string.concat(
+                "Wrong chain! Expected ",
+                vm.toString(expectedChainId),
+                " but got ",
+                vm.toString(block.chainid)
+            )
+        );
+
         address admin = vm.envAddress("ADMIN");
         address usdc = vm.envAddress("USDC");
         address weth = vm.envAddress("WETH");
+        // V1 address — pass V1=0x0 for a fresh deploy with no waiver migration.
+        address v1 = vm.envOr("V1", address(0));
 
-        console2.log("=== StreamRecoveryClaim Deployment ===");
+        console2.log("=== StreamRecoveryClaim V2 Deployment ===");
         console2.log("  chain id:", block.chainid);
         console2.log("  admin:   ", admin);
         console2.log("  usdc:    ", usdc);
         console2.log("  weth:    ", weth);
+        console2.log("  v1:      ", v1);
 
         vm.startBroadcast();
-        StreamRecoveryClaim claim = new StreamRecoveryClaim(admin, usdc, weth);
+        StreamRecoveryClaim claim = new StreamRecoveryClaim(admin, usdc, weth, v1);
         vm.stopBroadcast();
 
         console2.log("=== Deployed ===");

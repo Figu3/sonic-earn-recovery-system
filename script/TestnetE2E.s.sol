@@ -121,7 +121,7 @@ contract TestnetE2E is Script {
         vm.startBroadcast(ADMIN_PK);
         usdc = new ERC20Mock("USD Coin", "USDC", 6);
         weth = new ERC20Mock("Wrapped Ether", "WETH", 18);
-        claim = new StreamRecoveryClaim(admin, address(usdc), address(weth));
+        claim = new StreamRecoveryClaim(admin, address(usdc), address(weth), address(0));
         vm.stopBroadcast();
 
         console2.log("  USDC:", address(usdc));

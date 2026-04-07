@@ -13,6 +13,13 @@ scripts/output/*
 !scripts/output/merkle-usdc.json
 !scripts/output/merkle-weth.json
 !scripts/output/snapshot-63645527.json
+# V2 / Round 0v2 artifacts
+!scripts/output/merkle-round0v2-usdc.json
+!scripts/output/merkle-round0v2-weth.json
+!scripts/output/round0-claimed.json
+!scripts/output/merkle-round1-usdc.json
+!scripts/output/merkle-round1-weth.json
+!scripts/output/round1-resolved-depositors.json
 
 # OS
 .DS_Store

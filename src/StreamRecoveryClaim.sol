@@ -5,7 +5,7 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 /// @title Trevee Earn Recovery Distributor (StreamRecoveryClaim)
 /// @notice Distributes recovered assets from the Stream Trading incident to affected
@@ -15,6 +15,8 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///      This allows ~85% of users (USDC-only) to claim without touching the WETH tree,
 ///      and enables independent distribution rounds per token.
 ///      Users must sign an EIP-712 waiver before claiming.
+///      V2: Supports both EOA (ECDSA) and smart contract wallets (ERC-1271)
+///      via SignatureChecker. Reads V1 waiver state to avoid re-signing.
 contract StreamRecoveryClaim is EIP712 {
     using SafeERC20 for IERC20;
 
@@ -47,6 +49,9 @@ contract StreamRecoveryClaim is EIP712 {
 
     IERC20 public immutable usdc;
     IERC20 public immutable weth;
+
+    /// @notice V1 contract reference for waiver migration. Zero address if fresh deploy.
+    StreamRecoveryClaim public immutable v1;
 
     uint256 public roundCount;
 
@@ -135,11 +140,16 @@ contract StreamRecoveryClaim is EIP712 {
     }
 
     // ─── Constructor ────────────────────────────────────────────────────
+    /// @param _admin Admin address for round management.
+    /// @param _usdc USDC token address.
+    /// @param _weth WETH token address.
+    /// @param _v1 V1 contract address for waiver migration (address(0) if fresh deploy).
     constructor(
         address _admin,
         address _usdc,
-        address _weth
-    ) EIP712("StreamRecoveryClaim", "1") {
+        address _weth,
+        address _v1
+    ) EIP712("StreamRecoveryClaim", "2") {
         if (_admin == address(0)) revert ZeroAddress();
         if (_usdc == address(0)) revert ZeroAddress();
         if (_weth == address(0)) revert ZeroAddress();
@@ -147,6 +157,7 @@ contract StreamRecoveryClaim is EIP712 {
         admin = _admin;
         usdc = IERC20(_usdc);
         weth = IERC20(_weth);
+        v1 = StreamRecoveryClaim(_v1);
     }
 
     // ─── Admin: Round Management ────────────────────────────────────────
@@ -237,7 +248,19 @@ contract StreamRecoveryClaim is EIP712 {
 
     // ─── User: Waiver ───────────────────────────────────────────────────
 
+    /// @notice Migrate waiver from V1. If caller signed on V1, auto-approve on V2.
+    ///         No signature needed — V1 state is the proof.
+    function migrateWaiverFromV1() external whenNotPaused {
+        if (hasSignedWaiver[msg.sender]) revert AlreadySigned();
+        if (address(v1) == address(0)) revert InvalidSignature();
+        if (!v1.hasSignedWaiver(msg.sender)) revert InvalidSignature();
+
+        hasSignedWaiver[msg.sender] = true;
+        emit WaiverSigned(msg.sender);
+    }
+
     /// @notice Sign the liability waiver using EIP-712 typed data.
+    ///         Supports both EOA (ECDSA) and smart contract wallets (ERC-1271).
     /// @param v Signature v component.
     /// @param r Signature r component.
     /// @param s Signature s component.
@@ -253,10 +276,10 @@ contract StreamRecoveryClaim is EIP712 {
         );
         bytes32 digest = _hashTypedDataV4(structHash);
 
-        // Use bytes signature overload — OZ's ECDSA performs malleability checks
-        address signer = ECDSA.recover(digest, abi.encodePacked(r, s, v));
-
-        if (signer != msg.sender) revert InvalidSignature();
+        // SignatureChecker handles both EOA (ECDSA) and contract wallets (ERC-1271)
+        if (!SignatureChecker.isValidSignatureNow(msg.sender, digest, abi.encodePacked(r, s, v))) {
+            revert InvalidSignature();
+        }
 
         hasSignedWaiver[msg.sender] = true;
         emit WaiverSigned(msg.sender);
