@@ -20,15 +20,16 @@ import {Merkle} from "./utils/Merkle.sol";
 ///                         msg.sender.code.length > 0
 ///   - G12 1271 wallet  : minimal Mock1271 returns 0x1626ba7e for the digest →
 ///                         ERC-1271 fallback path
+///   - G3  1-of-1 Safe  : real on-chain Safe (0x697f…2de8, the largest stuck
+///                         threshold-1 recipient by USDC) → 1×65-byte
+///                         pre-approved bundle. 158 of the 182 stuck Safes are
+///                         threshold-1, so this is the dominant production
+///                         path; we exercise it end-to-end rather than relying
+///                         on "behaves like threshold-≥2" reasoning.
 ///   - G4  2-of-N Safe  : real on-chain Safe (0x4d62…ff1d, the largest stuck
 ///                         recipient by USDC) → 2×65-byte pre-approved bundle
 ///   - G5  3-of-N Safe  : real on-chain Safe (0x7D1C…6676) → 3×65-byte bundle
 ///   - G6  4-of-N Safe  : real on-chain Safe (0x6a15…6567) → 4×65-byte bundle
-///
-/// G3 (1-of-1 Safe) is intentionally omitted: 158 of the stuck Safes are
-/// threshold-1 and behave identically to a threshold-≥2 Safe under V2.1's
-/// fallback path — thresholds 2/3/4 already prove the variable-length code
-/// path works for any N.
 ///
 /// Group B (G1, G8, G9, G10, G11) — merkle tree-content audits — are NOT in
 /// this file. They cross-reference real V2.1 merkle JSON against
@@ -39,9 +40,15 @@ contract ForkV21WaiverTest is Test {
 
     // ─── Sonic mainnet token addresses ──────────────────────────────────
     address constant USDC_SONIC = 0x29219dd400f2Bf60E5a23d13Be72B486D4038894;
-    address constant WETH_SONIC = 0x039e2fB66102314Ce7b64Ce5Ce3E5183bc94aD38;
+    // Sonic canonical WETH ("Wrapped Ether on Sonic") — the token V2 was
+    // deployed with. DO NOT use 0x039e2fB…aD38 — that is Wrapped Sonic (wS),
+    // the native gas token, NOT WETH. Verified on-chain via `v2.weth()`.
+    address constant WETH_SONIC = 0x50c42dEAcD8Fc9773493ED674b675bE577f2634b;
 
     // ─── Real on-chain Safe targets from Phase A ─────────────────────────
+    // SAFE_1 is the largest stuck threshold-1 Safe by USDC; verified on-chain
+    // via `cast call <addr> "getThreshold()(uint256)"` → 1.
+    address constant SAFE_1 = 0x697f27643eEd4D13276a126a31f0e84EeFF92dE8; // 1-of-1
     address constant SAFE_2 = 0x4d62b6E166767988106cF7Ee8fE23E480E76FF1d; // 2-of-N
     address constant SAFE_3 = 0x7D1C5910C1d82A4874fAC4EDfe80eb3C2b706676; // 3-of-N
     address constant SAFE_4 = 0x6a150370626bB338e921b59e78AF991e6B416567; // 4-of-N
@@ -51,9 +58,9 @@ contract ForkV21WaiverTest is Test {
     address constant DELEGATION_TARGET = 0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B;
 
     // ─── Pool sizing ────────────────────────────────────────────────────
-    // 7 claimants, each gets ~14.28% — round down to 14% so the sum stays
-    // strictly under the pool total (V2.1 enforces ClaimExceedsTotal).
-    uint256 constant SHARE_WAD = 0.14e18;
+    // 8 claimants, each gets 12% — sum is 0.96e18, strictly under the pool
+    // total (V2.1 enforces ClaimExceedsTotal).
+    uint256 constant SHARE_WAD = 0.12e18;
     uint256 constant USDC_TOTAL = 10_000e6;     // 10k USDC, 6 dec
     uint256 constant WETH_TOTAL = 10e18;        // 10 WETH
 
@@ -119,8 +126,12 @@ contract ForkV21WaiverTest is Test {
             proofs[i] = Merkle.getProof(leaves, i);
         }
 
-        // Deploy V2.1 fresh — no prior waiver registry
-        v21 = new StreamRecoveryClaimV21(admin, USDC_SONIC, WETH_SONIC, address(0));
+        // Deploy V2.1 fresh. The constructor now requires a non-zero
+        // priorWaivers — pass a dummy address (none of the Group A tests
+        // exercise migrateWaiverFromPrior, so the target contract is never
+        // called). Real deploy must use the actual V1 or V2 address.
+        address priorMock = makeAddr("priorMock");
+        v21 = new StreamRecoveryClaimV21(admin, USDC_SONIC, WETH_SONIC, priorMock);
 
         // Fund the contract
         deal(USDC_SONIC, address(v21), USDC_TOTAL);

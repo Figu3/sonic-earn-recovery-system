@@ -161,7 +161,14 @@ contract StreamRecoveryClaimV21 is EIP712 {
     /// @param _usdc USDC token address.
     /// @param _weth WETH token address.
     /// @param _priorWaivers Previous-version distributor address (V1 or V2) for
-    ///                      waiver migration. Pass address(0) if no prior deploy.
+    ///                      waiver migration. MUST be non-zero — V2.1 is a
+    ///                      remediation redeploy that always points at a prior
+    ///                      contract, and a zero address would silently brick
+    ///                      precondition (1) of the V2.1 design doc (every EOA
+    ///                      with a pre-existing V1 waiver must be able to
+    ///                      migrate via `migrateWaiverFromPrior`). Reverting at
+    ///                      deploy time is preferable to a half-broken
+    ///                      production contract.
     constructor(
         address _admin,
         address _usdc,
@@ -171,6 +178,7 @@ contract StreamRecoveryClaimV21 is EIP712 {
         if (_admin == address(0)) revert ZeroAddress();
         if (_usdc == address(0)) revert ZeroAddress();
         if (_weth == address(0)) revert ZeroAddress();
+        if (_priorWaivers == address(0)) revert ZeroAddress();
 
         admin = _admin;
         usdc = IERC20(_usdc);
