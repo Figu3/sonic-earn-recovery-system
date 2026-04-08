@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>V2.1 Waiver Helper — Trevee Stream Recovery</title>
+<style>
+  :root {
+    --bg:#0e0f12; --fg:#e6e8eb; --dim:#8a8f98; --accent:#5fd4a3;
+    --err:#ff7a7a; --warn:#ffc062; --ok:#5fd4a3;
+    --panel:#15171c; --border:#262a33; --code:#0a0b0f;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    background:var(--bg); color:var(--fg); padding:24px;
+    max-width:960px; margin-left:auto; margin-right:auto;
+  }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:28px 0 8px; color:var(--accent); border-bottom:1px solid var(--border); padding-bottom:4px; }
+  h3 { font-size:13px; margin:16px 0 6px; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; }
+  .sub { color:var(--dim); margin-bottom:20px; font-size:12px; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:16px; margin-bottom:16px; }
+  input[type=text] {
+    width:100%; padding:10px 12px; font:inherit; color:var(--fg);
+    background:var(--code); border:1px solid var(--border); border-radius:4px;
+  }
+  input[type=text]:focus { outline:none; border-color:var(--accent); }
+  button {
+    padding:10px 16px; font:inherit; font-weight:600;
+    background:var(--accent); color:#0e0f12; border:0; border-radius:4px;
+    cursor:pointer; margin-top:10px;
+  }
+  button:hover { filter:brightness(1.1); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.copy {
+    padding:4px 10px; font-size:11px; font-weight:500;
+    background:transparent; color:var(--accent); border:1px solid var(--accent);
+    margin:0 0 0 8px;
+  }
+  pre {
+    background:var(--code); border:1px solid var(--border); border-radius:4px;
+    padding:10px 12px; margin:4px 0; overflow-x:auto;
+    font-size:12px; word-break:break-all; white-space:pre-wrap;
+  }
+  .kv { display:grid; grid-template-columns:180px 1fr; gap:4px 12px; font-size:12px; }
+  .kv dt { color:var(--dim); }
+  .kv dd { margin:0; word-break:break-all; }
+  .err { color:var(--err); }
+  .warn { color:var(--warn); }
+  .ok { color:var(--ok); }
+  .hidden { display:none; }
+  ul.owners { list-style:none; padding:0; margin:4px 0; }
+  ul.owners li {
+    padding:6px 10px; background:var(--code); border:1px solid var(--border);
+    border-radius:4px; margin:4px 0; display:flex; align-items:center; gap:8px;
+    font-size:12px;
+  }
+  ul.owners li.selected { border-color:var(--accent); }
+  ul.owners input { margin:0; }
+  .footer { margin-top:40px; padding-top:16px; border-top:1px solid var(--border); color:var(--dim); font-size:11px; }
+  .footer a { color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:3px; font-size:12px; }
+  .step-head { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+  .step-num {
+    display:inline-block; width:22px; height:22px; line-height:22px; text-align:center;
+    background:var(--accent); color:#0e0f12; border-radius:50%; font-weight:700; font-size:11px;
+  }
+  .note { color:var(--warn); font-size:12px; margin:6px 0; }
+</style>
+</head>
+<body>
+
+<h1>V2.1 Waiver Helper</h1>
+<div class="sub">
+  Generate the exact calldata a multi-sig Safe needs to sign the V2.1 waiver and claim from the Trevee Stream Recovery distributor. Enter your Safe address below.
+</div>
+
+<div class="panel">
+  <h3>Safe address</h3>
+  <input id="safeInput" type="text" placeholder="0x...">
+  <button id="lookupBtn">Look up</button>
+  <div id="status" style="margin-top:8px; font-size:12px; color:var(--dim);"></div>
+</div>
+
+<div id="results" class="hidden">
+
+  <h2>Safe info</h2>
+  <div class="panel">
+    <dl class="kv" id="safeInfo"></dl>
+  </div>
+
+  <h2>Entitlement in V2.1 Round 0</h2>
+  <div class="panel">
+    <dl class="kv" id="entitlement"></dl>
+  </div>
+
+  <h2>Waiver status</h2>
+  <div class="panel">
+    <dl class="kv" id="waiverStatus"></dl>
+    <div id="migrateBox" class="hidden" style="margin-top:12px;">
+      <div class="note">This Safe already signed the waiver on V2 — it can migrate via <code>migrateWaiverFromPrior()</code> with a single Safe tx (no owner pre-approval needed).</div>
+      <h3>Migrate waiver (single Safe tx)</h3>
+      <dl class="kv" id="migrateCalldata"></dl>
+    </div>
+  </div>
+
+  <div id="signSection" class="hidden">
+    <h2>Step 1 — Owners approve the hash</h2>
+    <div class="panel">
+      <div style="margin-bottom:10px;">
+        Pick any <b id="thresholdLabel"></b> owners. Each selected owner must send a regular transaction <b>from their own EOA wallet</b> (not via the Safe) to the Safe contract, calling <code>approveHash</code>. It's a tiny tx — typically &lt;$0.01 on Sonic.
+      </div>
+      <h3>Owners (select exactly <span id="thresholdLabel2"></span>)</h3>
+      <ul id="owners" class="owners"></ul>
+      <h3>approveHash calldata (same for every selected owner)</h3>
+      <div class="step-head"><span class="step-num">1</span><div>Each owner sends this tx:</div></div>
+      <dl class="kv" id="approveHashCall"></dl>
+    </div>
+
+    <h2>Step 2 — Safe executes signWaiver</h2>
+    <div class="panel">
+      <div style="margin-bottom:10px;">
+        After all approvers have sent their <code>approveHash</code> tx, queue this Safe transaction from your Safe UI. The Safe's own threshold signatures still apply (that's a separate signing round handled by Safe UI normally — unrelated to the waiver bundle).
+      </div>
+      <div class="step-head"><span class="step-num">2</span><div>Safe tx (Custom data mode):</div></div>
+      <dl class="kv" id="signWaiverCall"></dl>
+    </div>
+  </div>
+
+  <div id="claimSection" class="hidden">
+    <h2>Step 3 — Claim</h2>
+    <div class="panel" id="claimCallsPanel">
+      <div style="margin-bottom:10px;">
+        Once the waiver is signed (or migrated), queue these Safe transactions (can be batched into a multi-send):
+      </div>
+      <div id="claimCalls"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  V2.1 distributor: <a href="https://sonicscan.org/address/0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03" target="_blank">0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03</a> ·
+  Source: <a href="https://github.com/Figu3/sonic-earn-recovery-system" target="_blank">github.com/Figu3/sonic-earn-recovery-system</a> ·
+  This page queries Sonic RPC and the public merkle JSONs — no backend, no tracking.
+</div>
+
+<script type="module">
+import { BrowserProvider, JsonRpcProvider, Interface, getAddress, isAddress, concat, zeroPadValue, AbiCoder } from "https://esm.sh/ethers@6.13.5";
+
+// ─── Config ──────────────────────────────────────────────────────────
+const SONIC_RPC = "https://rpc.soniclabs.com";
+const V21  = "0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03";
+const V2   = "0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31";
+const USDC = "0x29219dd400f2Bf60E5a23d13Be72B486D4038894";
+const WETH = "0x50c42dEAcD8Fc9773493ED674b675bE577f2634b";
+const REPO_RAW = "https://raw.githubusercontent.com/Figu3/sonic-earn-recovery-system/main";
+const USDC_TREE_URL = REPO_RAW + "/scripts/output/merkle-round0v2-v2.1-usdc.json";
+const WETH_TREE_URL = REPO_RAW + "/scripts/output/merkle-round0v2-v2.1-weth.json";
+
+// ─── ABIs (minimal) ──────────────────────────────────────────────────
+const v21Abi = new Interface([
+  "function getWaiverDigest(address) view returns (bytes32)",
+  "function hasSignedWaiver(address) view returns (bool)",
+  "function hasClaimedUsdc(uint256,address) view returns (bool)",
+  "function hasClaimedWeth(uint256,address) view returns (bool)",
+  "function signWaiver(bytes)",
+  "function migrateWaiverFromPrior()",
+  "function claimUsdc(uint256,uint256,bytes32[])",
+  "function claimWeth(uint256,uint256,bytes32[])",
+]);
+const safeAbi = new Interface([
+  "function getThreshold() view returns (uint256)",
+  "function getOwners() view returns (address[])",
+  "function approveHash(bytes32)",
+  "function getMessageHash(bytes) view returns (bytes32)",
+]);
+const v2Abi = new Interface([
+  "function hasSignedWaiver(address) view returns (bool)",
+]);
+
+// ─── UI helpers ──────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const statusEl = $("status");
+function setStatus(msg, cls) { statusEl.className = cls || ""; statusEl.textContent = msg; }
+function copyBtn(value) {
+  const b = document.createElement("button");
+  b.className = "copy"; b.textContent = "Copy";
+  b.onclick = () => { navigator.clipboard.writeText(value); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); };
+  return b;
+}
+function kvRow(container, label, value, mono = true) {
+  const dt = document.createElement("dt"); dt.textContent = label;
+  const dd = document.createElement("dd");
+  if (mono) {
+    const pre = document.createElement("pre"); pre.textContent = value; pre.style.margin = "0";
+    dd.appendChild(pre); dd.appendChild(copyBtn(value));
+  } else {
+    dd.textContent = value;
+  }
+  container.appendChild(dt); container.appendChild(dd);
+}
+
+// ─── State ───────────────────────────────────────────────────────────
+let provider, usdcTree, wethTree, usdcByAddr, wethByAddr;
+let loadedSafe = null;
+let safeInfo = null;
+let digest = null;
+let messageHash = null;
+
+// ─── Tree loader (lazy, cached) ──────────────────────────────────────
+async function loadTrees() {
+  if (usdcTree && wethTree) return;
+  setStatus("Loading merkle trees from GitHub (≈8 MB)…");
+  const [u, w] = await Promise.all([
+    fetch(USDC_TREE_URL).then(r => r.json()),
+    fetch(WETH_TREE_URL).then(r => r.json()),
+  ]);
+  usdcTree = u; wethTree = w;
+  usdcByAddr = new Map(u.entries.map(e => [e.address.toLowerCase(), e]));
+  wethByAddr = new Map(w.entries.map(e => [e.address.toLowerCase(), e]));
+}
+
+// ─── Sort owners ascending by uint160 ────────────────────────────────
+function sortOwnersAsc(addrs) {
+  return [...addrs].sort((a, b) => {
+    const ai = BigInt(a.toLowerCase());
+    const bi = BigInt(b.toLowerCase());
+    return ai < bi ? -1 : ai > bi ? 1 : 0;
+  });
+}
+
+// ─── Build a Safe v=1 pre-approved bundle from owner addresses ───────
+function buildBundle(sortedOwners) {
+  let hex = "0x";
+  for (const o of sortedOwners) {
+    const r = zeroPadValue(getAddress(o), 32).slice(2);
+    const s = "0".repeat(64);
+    const v = "01";
+    hex += r + s + v;
+  }
+  return hex;
+}
+
+// ─── Lookup flow ─────────────────────────────────────────────────────
+async function lookup() {
+  const input = $("safeInput").value.trim();
+  if (!isAddress(input)) { setStatus("Not a valid address", "err"); return; }
+  $("lookupBtn").disabled = true;
+  setStatus("Querying chain…");
+
+  try {
+    provider = new JsonRpcProvider(SONIC_RPC, { chainId: 146, name: "sonic" });
+    const safe = getAddress(input);
+    loadedSafe = safe;
+
+    // Parallel on-chain reads
+    const [
+      code, threshold, owners,
+      v21HasSigned, usdcClaimed, wethClaimed,
+      v2HasSigned,
+      digestRaw,
+    ] = await Promise.all([
+      provider.getCode(safe),
+      provider.call({ to: safe, data: safeAbi.encodeFunctionData("getThreshold", []) }).then(r => safeAbi.decodeFunctionResult("getThreshold", r)[0]).catch(() => null),
+      provider.call({ to: safe, data: safeAbi.encodeFunctionData("getOwners", []) }).then(r => safeAbi.decodeFunctionResult("getOwners", r)[0]).catch(() => null),
+      provider.call({ to: V21, data: v21Abi.encodeFunctionData("hasSignedWaiver", [safe]) }).then(r => v21Abi.decodeFunctionResult("hasSignedWaiver", r)[0]),
+      provider.call({ to: V21, data: v21Abi.encodeFunctionData("hasClaimedUsdc", [0n, safe]) }).then(r => v21Abi.decodeFunctionResult("hasClaimedUsdc", r)[0]),
+      provider.call({ to: V21, data: v21Abi.encodeFunctionData("hasClaimedWeth", [0n, safe]) }).then(r => v21Abi.decodeFunctionResult("hasClaimedWeth", r)[0]),
+      provider.call({ to: V2,  data: v2Abi.encodeFunctionData("hasSignedWaiver", [safe]) }).then(r => v2Abi.decodeFunctionResult("hasSignedWaiver", r)[0]),
+      provider.call({ to: V21, data: v21Abi.encodeFunctionData("getWaiverDigest", [safe]) }).then(r => v21Abi.decodeFunctionResult("getWaiverDigest", r)[0]),
+    ]);
+
+    const isContract = code && code !== "0x";
+    digest = digestRaw;
+
+    if (isContract && threshold != null) {
+      // Contract with Safe ABI → compute messageHash via the Safe's fallback
+      const encoded = AbiCoder.defaultAbiCoder().encode(["bytes32"], [digest]);
+      const mh = await provider.call({
+        to: safe,
+        data: safeAbi.encodeFunctionData("getMessageHash", [encoded]),
+      });
+      messageHash = safeAbi.decodeFunctionResult("getMessageHash", mh)[0];
+    } else {
+      messageHash = null;
+    }
+
+    safeInfo = { isContract, threshold, owners, v21HasSigned, usdcClaimed, wethClaimed, v2HasSigned };
+
+    // Load trees (once)
+    await loadTrees();
+
+    render();
+    setStatus("Loaded.", "ok");
+  } catch (e) {
+    console.error(e);
+    setStatus("Error: " + e.message, "err");
+  } finally {
+    $("lookupBtn").disabled = false;
+  }
+}
+
+// ─── Render ──────────────────────────────────────────────────────────
+function render() {
+  $("results").classList.remove("hidden");
+
+  // Safe info
+  const info = $("safeInfo"); info.innerHTML = "";
+  kvRow(info, "Address", loadedSafe);
+  kvRow(info, "Is contract", safeInfo.isContract ? "yes" : "no (EOA)", false);
+  if (safeInfo.threshold != null) {
+    kvRow(info, "Threshold", `${safeInfo.threshold.toString()}-of-${safeInfo.owners.length}`, false);
+    const ownersList = safeInfo.owners.join("\n");
+    kvRow(info, "Owners", ownersList);
+  } else if (safeInfo.isContract) {
+    kvRow(info, "Note", "This contract does not expose Safe's getThreshold — it may not be a Gnosis Safe. If it's a standard ERC-1271 wallet it can just call signWaiver(signature) directly from its own signing flow.", false);
+  }
+
+  // Entitlement
+  const ent = $("entitlement"); ent.innerHTML = "";
+  const key = loadedSafe.toLowerCase();
+  const uLeaf = usdcByAddr.get(key);
+  const wLeaf = wethByAddr.get(key);
+  if (uLeaf) {
+    kvRow(ent, "USDC", `${(Number(BigInt(uLeaf.amount)) / 1e6).toLocaleString(undefined, {maximumFractionDigits: 6})} USDC (raw ${uLeaf.amount})`, false);
+  } else {
+    kvRow(ent, "USDC", "— not in V2.1 USDC tree", false);
+  }
+  if (wLeaf) {
+    kvRow(ent, "WETH", `${(Number(BigInt(wLeaf.amount)) / 1e18).toFixed(6)} WETH (raw ${wLeaf.amount})`, false);
+  } else {
+    kvRow(ent, "WETH", "— not in V2.1 WETH tree", false);
+  }
+  if (!uLeaf && !wLeaf) {
+    const warn = document.createElement("dd");
+    warn.className = "err";
+    warn.style.gridColumn = "1 / -1";
+    warn.textContent = "This address is not in either V2.1 tree. It's either already claimed on V1/V2 (and excluded from V2.1) or was never a vault depositor.";
+    ent.appendChild(warn);
+  }
+
+  // Waiver status
+  const ws = $("waiverStatus"); ws.innerHTML = "";
+  kvRow(ws, "V2.1 hasSignedWaiver", safeInfo.v21HasSigned.toString(), false);
+  kvRow(ws, "V2  hasSignedWaiver", safeInfo.v2HasSigned.toString(), false);
+  kvRow(ws, "V2.1 hasClaimedUsdc", safeInfo.usdcClaimed.toString(), false);
+  kvRow(ws, "V2.1 hasClaimedWeth", safeInfo.wethClaimed.toString(), false);
+
+  // Migrate path (if V2 waiver exists and V2.1 doesn't yet)
+  if (safeInfo.v2HasSigned && !safeInfo.v21HasSigned) {
+    $("migrateBox").classList.remove("hidden");
+    const mb = $("migrateCalldata"); mb.innerHTML = "";
+    kvRow(mb, "To", V21);
+    kvRow(mb, "Value", "0", false);
+    kvRow(mb, "Data", v21Abi.encodeFunctionData("migrateWaiverFromPrior", []));
+  } else {
+    $("migrateBox").classList.add("hidden");
+  }
+
+  // Signing steps (only for Safes that need to sign fresh)
+  if (
+    !safeInfo.v21HasSigned &&
+    !safeInfo.v2HasSigned &&
+    safeInfo.isContract &&
+    safeInfo.threshold != null
+  ) {
+    $("signSection").classList.remove("hidden");
+    $("thresholdLabel").textContent = safeInfo.threshold.toString();
+    $("thresholdLabel2").textContent = safeInfo.threshold.toString();
+
+    // Owner picker (sorted ascending — that's the required bundle order)
+    const ul = $("owners"); ul.innerHTML = "";
+    const sortedOwners = sortOwnersAsc(safeInfo.owners);
+    const selected = new Set(sortedOwners.slice(0, Number(safeInfo.threshold))); // default: first N
+
+    const renderBundle = () => {
+      const chosen = sortedOwners.filter(o => selected.has(o));
+      if (chosen.length !== Number(safeInfo.threshold)) {
+        $("signWaiverCall").innerHTML = `<dd class="err" style="grid-column:1/-1;">Pick exactly ${safeInfo.threshold.toString()} owners.</dd>`;
+        return;
+      }
+      const bundle = buildBundle(chosen);
+      const swCalldata = v21Abi.encodeFunctionData("signWaiver", [bundle]);
+      const sw = $("signWaiverCall"); sw.innerHTML = "";
+      kvRow(sw, "To", V21);
+      kvRow(sw, "Value", "0", false);
+      kvRow(sw, "Data", swCalldata);
+      kvRow(sw, "Bundle (inner)", bundle);
+      kvRow(sw, "Selected signers", chosen.join(", "));
+    };
+
+    sortedOwners.forEach(o => {
+      const li = document.createElement("li");
+      if (selected.has(o)) li.classList.add("selected");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = selected.has(o);
+      cb.onchange = () => {
+        if (cb.checked) selected.add(o); else selected.delete(o);
+        li.classList.toggle("selected", cb.checked);
+        renderBundle();
+      };
+      const lbl = document.createElement("span"); lbl.textContent = o;
+      li.appendChild(cb); li.appendChild(lbl);
+      ul.appendChild(li);
+    });
+
+    // approveHash calldata (same for every owner)
+    const ah = $("approveHashCall"); ah.innerHTML = "";
+    kvRow(ah, "To (the Safe)", loadedSafe);
+    kvRow(ah, "Value", "0", false);
+    kvRow(ah, "Data", safeAbi.encodeFunctionData("approveHash", [messageHash]));
+    kvRow(ah, "messageHash arg", messageHash);
+    kvRow(ah, "V2.1 waiver digest", digest);
+
+    renderBundle();
+  } else {
+    $("signSection").classList.add("hidden");
+  }
+
+  // Claim section
+  const cs = $("claimSection");
+  const anyToClaim =
+    (uLeaf && !safeInfo.usdcClaimed) || (wLeaf && !safeInfo.wethClaimed);
+
+  if (anyToClaim) {
+    cs.classList.remove("hidden");
+    const container = $("claimCalls"); container.innerHTML = "";
+
+    if (uLeaf && !safeInfo.usdcClaimed) {
+      const h3 = document.createElement("h3"); h3.textContent = "claimUsdc"; container.appendChild(h3);
+      const dl = document.createElement("dl"); dl.className = "kv";
+      const data = v21Abi.encodeFunctionData("claimUsdc", [0n, BigInt(uLeaf.shareWad), uLeaf.proof]);
+      kvRow(dl, "To", V21);
+      kvRow(dl, "Value", "0", false);
+      kvRow(dl, "Data", data);
+      kvRow(dl, "shareWad", uLeaf.shareWad);
+      kvRow(dl, "proof length", uLeaf.proof.length.toString(), false);
+      container.appendChild(dl);
+    }
+
+    if (wLeaf && !safeInfo.wethClaimed) {
+      const h3 = document.createElement("h3"); h3.textContent = "claimWeth"; container.appendChild(h3);
+      const dl = document.createElement("dl"); dl.className = "kv";
+      const data = v21Abi.encodeFunctionData("claimWeth", [0n, BigInt(wLeaf.shareWad), wLeaf.proof]);
+      kvRow(dl, "To", V21);
+      kvRow(dl, "Value", "0", false);
+      kvRow(dl, "Data", data);
+      kvRow(dl, "shareWad", wLeaf.shareWad);
+      kvRow(dl, "proof length", wLeaf.proof.length.toString(), false);
+      container.appendChild(dl);
+    }
+  } else {
+    cs.classList.add("hidden");
+  }
+}
+
+// ─── Wire up ─────────────────────────────────────────────────────────
+$("lookupBtn").addEventListener("click", lookup);
+$("safeInput").addEventListener("keydown", e => { if (e.key === "Enter") lookup(); });
+
+// Prefill from ?safe= query param
+const params = new URLSearchParams(location.search);
+const prefilled = params.get("safe");
+if (prefilled) { $("safeInput").value = prefilled; lookup(); }
+</script>
+</body>
+</html>
