@@ -4,9 +4,10 @@ Update the `[ ]` → `[x]` boxes as you complete each item. Each phase ends
 with a verification step that must produce the expected on-chain state
 before moving on.
 
-**Latest code commit:** `96111f9`
-**V1:** `0xda7805AdbEfa29b9e3Ba1d24B96C71aAE696745b` (paused; waiver-migration source only)
-**V2:** `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31`
+**Latest code commit:** `9a50c95`
+**V1:**  `0xda7805AdbEfa29b9e3Ba1d24B96C71aAE696745b` (paused; superseded)
+**V2:**  `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31` (paused, Round 0 deactivated; waiver-migration source for V2.1)
+**V2.1:** `0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03` ← **DEPLOYED, verified** https://sonicscan.org/address/0x61eba3faa88a20d9bb574c42efc6e812f95f1d03
 **Admin Safe:** `0x2b93eb843a54FA3ecAcb5A72a69DcB666B262069`
 **USDC:** `0x29219dd400f2Bf60E5a23d13Be72B486D4038894`
 **WETH:** `0x50c42dEAcD8Fc9773493ED674b675bE577f2634b` *(canonical Sonic WETH)*
@@ -111,56 +112,62 @@ Phase 2 captured the final state.
 
 ## Phase 3 — Fresh-eyes review *(Migration Checklist Step 6)*
 
-- [ ] **3.1** Read `src/StreamRecoveryClaimV21.sol` end-to-end with
-      `docs/v2.1-design.md` open side by side. For each of the 12
-      preconditions in F3, point at the code line that satisfies it.
-- [ ] **3.2** Cross-check Phase G test Safe addresses against
-      `scripts/output/safe-threshold-breakdown.json`
-      (`SAFE_2 = 0x4d62…ff1d`, `SAFE_3 = 0x7D1C…6676`,
-      `SAFE_4 = 0x6a15…6567`, `SAFE_1 = 0x697F…2DE8`).
+- [x] **3.1** Contract + design-doc cross-check done by human
+- [x] **3.2** Phase G Safe addresses cross-checked against affected-user list
+- [x] **3.3** Pre-deploy Q&A (V1+V2 exclusion / all-Safes / WQ users) — all PASS
+      with concrete evidence (see commit message of `9a50c95`)
 
 ---
 
-## Phase 4 — Deploy V2.1 (isolated, no funds yet)
+## Phase 4 — Deploy V2.1 (isolated, no funds yet) — DONE
 
-- [ ] **4.1** Prepare deploy params:
-  - `_admin` = `0x2b93eb843a54FA3ecAcb5A72a69DcB666B262069` (admin Safe)
+- [x] **4.1** Deploy params:
+  - `_admin` = `0x2b93eb843a54FA3ecAcb5A72a69DcB666B262069`
   - `_usdc`  = `0x29219dd400f2Bf60E5a23d13Be72B486D4038894`
   - `_weth`  = `0x50c42dEAcD8Fc9773493ED674b675bE577f2634b`
-  - `_priorWaivers` = `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31` ← **V2**, not V1 (V2 carries the union of V1 migrants + V2-direct signers)
+  - `_priorWaivers` = `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31` (V2)
 
-- [ ] **4.2** Deploy via Foundry script. Derive deployer address with
-      `vm.addr(vm.envUint("PRIVATE_KEY"))` (per `rules/solidity-security.md`
-      §3 — never `msg.sender` inside a Foundry script).
+- [x] **4.2** Deployed via `script/DeployV21.s.sol` with `forge script --broadcast --verify`
+      (deployer = `0x40f953977258B560D607bB3C74bbEF1580fA794B`, cost ≈ 0.627 S)
 
-- [ ] **4.3** Record the deployed address:
-  - V2.1 = `________________________________________________________________`
+- [x] **4.3** **V2.1 = `0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03`**
 
-- [ ] **4.4** Post-deploy verification (all on-chain)
+- [x] **4.4** Post-deploy on-chain verification — all values correct:
   ```
-  V21=<deployed>
-  cast call $V21 "admin()(address)"          --rpc-url $RPC  # == 0x2b93eb8...
-  cast call $V21 "usdc()(address)"           --rpc-url $RPC  # == 0x29219dd4...
-  cast call $V21 "weth()(address)"           --rpc-url $RPC  # == 0x50c42dEA...
-  cast call $V21 "priorWaivers()(address)"   --rpc-url $RPC  # == 0x6472D708... (V2)
-  cast call $V21 "roundCount()(uint256)"     --rpc-url $RPC  # == 0
-  cast call $V21 "paused()(bool)"            --rpc-url $RPC  # == false
-  cast call $V21 "domainSeparator()(bytes32)" --rpc-url $RPC  # record for frontend
+  admin:           0x2b93eb843a54FA3ecAcb5A72a69DcB666B262069  ✓
+  pendingAdmin:    0x0000000000000000000000000000000000000000  ✓
+  usdc:            0x29219dd400f2Bf60E5a23d13Be72B486D4038894  ✓
+  weth:            0x50c42dEAcD8Fc9773493ED674b675bE577f2634b  ✓
+  priorWaivers:    0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31  ✓ (V2)
+  roundCount:      0                                             ✓
+  paused:          false                                         ✓
+  totalUsdcAlloc:  0                                             ✓
+  totalWethAlloc:  0                                             ✓
+  domainSeparator: 0xaf13517e0743e208eba0df5c7d2571f7c6f5dcd42aa1c547b455cdf5826dd560
+  USDC balance:    0   (awaiting Phase 5 funding)
+  WETH balance:    0   (awaiting Phase 5 funding)
   ```
 
-- [ ] **4.5** Verify source on SonicScan
-  ```
-  forge verify-contract $V21 StreamRecoveryClaimV21 --chain sonic \
-    --etherscan-api-key $SONICSCAN_API_KEY
-  ```
+- [x] **4.5** Source verified on SonicScan
+      https://sonicscan.org/address/0x61eba3faa88a20d9bb574c42efc6e812f95f1d03
 
 ---
 
 ## Phase 5 — Fund V2.1 and open Round 0
 
-- [ ] **5.1** Queue `usdc.transfer(V21, 348899406347)` from admin Safe
-- [ ] **5.2** Queue `weth.transfer(V21, 326024027675757771426)` from admin Safe
-      *(or exactly the new tree totals from 2.3 — they should equal these
+**V2.1 address:** `0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03`
+**Depends on:** Phase 1.2 + 1.3 rescue txs landing first (admin Safe must
+hold the rescued USDC + WETH before this phase can run).
+
+- [ ] **5.1** Queue `usdc.transfer(V21, 348888033588)` from admin Safe
+  - to:    `0x29219dd400f2Bf60E5a23d13Be72B486D4038894`
+  - value: `0`
+  - calldata: `cast calldata "transfer(address,uint256)" 0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03 348888033588`
+- [ ] **5.2** Queue `weth.transfer(V21, 326023604484012050420)` from admin Safe
+  - to:    `0x50c42dEAcD8Fc9773493ED674b675bE577f2634b`
+  - value: `0`
+  - calldata: `cast calldata "transfer(address,uint256)" 0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03 326023604484012050420`
+      *(matches the new tree totals from 2.3 exactly — they should equal these
       numbers, since the admin Safe received exactly the V2 wind-down
       amount in Phase 1)*
 
@@ -170,9 +177,18 @@ Phase 2 captured the final state.
   cast call $WETH "balanceOf(address)(uint256)" $V21 --rpc-url $RPC  # == tree wethTotal
   ```
 
-- [ ] **5.4** Queue `v21.createRound(usdcRoot, wethRoot, usdcTotal, wethTotal)` Safe tx
-  - roots from 2.3
-  - totals from 2.3 (should equal the Phase 5 funding amounts)
+- [ ] **5.4** Queue `v21.createRound(...)` Safe tx
+  - to:    `0x61eba3FAa88a20d9BB574c42EFC6e812f95F1d03` (V2.1)
+  - value: `0`
+  - calldata:
+    ```
+    0xe8ba0bc721ab37dc48d1d13fe9dafc04db13be01f628cbf7dbbfcb5fdbfc3ddd3d539fe07be1d2af458a586617ce6b56f46df727b68c022729aaf3b11a553b004941c14b000000000000000000000000000000000000000000000000000000513b58e934000000000000000000000000000000000000000000000011ac7c84ee5dfd07f4
+    ```
+  - decoded:
+    - `usdcMerkleRoot = 0x21ab37dc48d1d13fe9dafc04db13be01f628cbf7dbbfcb5fdbfc3ddd3d539fe0`
+    - `wethMerkleRoot = 0x7be1d2af458a586617ce6b56f46df727b68c022729aaf3b11a553b004941c14b`
+    - `usdcTotal = 348888033588`
+    - `wethTotal = 326023604484012050420`
   - will revert `InsufficientBalance` if 5.1 / 5.2 didn't transfer enough
 
 - [ ] **5.5** Post-createRound verification
