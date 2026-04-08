@@ -96,9 +96,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "scripts" / "output"
 
-# V1 pot totals — must match build-round0v2-v21.ts L45-L46
-V1_USDC = 370_052_027_675           # 6 decimals
-V1_WETH = 342_400_797_390_971_049_123  # 18 decimals
+# V2.1 target pot totals — must match build-round0v2-v21.ts TARGET_USDC / TARGET_WETH.
+# These are the V1 pot MINUS what V2 paid out before being paused and wound
+# down. Equal to the exact amounts the admin Safe rescued from V2.
+TARGET_USDC = 348_888_033_588           # 6 decimals
+TARGET_WETH = 326_023_604_484_012_050_420  # 18 decimals
+# Legacy names for clarity in comments below. Not used directly.
+V1_USDC = 370_052_027_675
+V1_WETH = 342_400_797_390_971_049_123
 
 
 def load(name: str) -> dict:
@@ -119,21 +124,24 @@ def main() -> int:
     weth_merkle = load("merkle-round0v2-v2.1-weth.json")
     r1u = load("merkle-round1-usdc.json")
     r1w = load("merkle-round1-weth.json")
-    claimed = load("round0-claimed.json")
+    claimed_v1 = load("round0-claimed.json")
+    claimed_v2 = load("round0-claimed-v2.json")
     wq_resolved = load("withdraw-queue-resolved.json")
     nine_mm = load("9mm-resolved.json")
 
     print(f"  USDC tree: {usdc_merkle['leafCount']} leaves, "
-          f"target ${V1_USDC/1e6:,.2f}, declared total ${int(usdc_merkle['newTotal'])/1e6:,.2f}")
+          f"target ${TARGET_USDC/1e6:,.2f}, declared total ${int(usdc_merkle['newTotal'])/1e6:,.2f}")
     print(f"  WETH tree: {weth_merkle['leafCount']} leaves, "
-          f"target {V1_WETH/1e18:,.4f} WETH, declared total {int(weth_merkle['newTotal'])/1e18:,.4f} WETH")
+          f"target {TARGET_WETH/1e18:,.4f} WETH, declared total {int(weth_merkle['newTotal'])/1e18:,.4f} WETH")
     print()
 
     usdc_idx = index_entries(usdc_merkle)
     weth_idx = index_entries(weth_merkle)
 
-    v1u_set = {a.lower() for a in claimed["usdc"]["claimedAddresses"]}
-    v1w_set = {a.lower() for a in claimed["weth"]["claimedAddresses"]}
+    v1u_set = {a.lower() for a in claimed_v1["usdc"]["claimedAddresses"]}
+    v1w_set = {a.lower() for a in claimed_v1["weth"]["claimedAddresses"]}
+    v2u_set = {a.lower() for a in claimed_v2["usdc"]["claimedAddresses"]}
+    v2w_set = {a.lower() for a in claimed_v2["weth"]["claimedAddresses"]}
     r1u_set = {e["address"].lower() for e in r1u["entries"]}
     r1w_set = {e["address"].lower() for e in r1w["entries"]}
 
@@ -147,8 +155,8 @@ def main() -> int:
             print(f"  {msg}")
             failures.append(msg)
 
-    # ─── INV1: V1-claimers in V2.1 tree must also be in R1 tree ──────────
-    print("INV1 (G1+G11): V1-claimers in V2.1 must come from the R1-merge path only")
+    # ─── INV1a: V1-claimers in V2.1 tree must also be in R1 tree ─────────
+    print("INV1a (G1+G11): V1-claimers in V2.1 must come from the R1-merge path only")
     leak_u = (v1u_set & set(usdc_idx))
     leak_w = (v1w_set & set(weth_idx))
     orphan_u = sorted(leak_u - r1u_set)
@@ -165,58 +173,78 @@ def main() -> int:
     )
     print()
 
-    # ─── INV2 (G8 + G9): WQ users present, with V1-claimer carve-out ─────
+    # ─── INV1b: V2-claimers must be FULLY absent from V2.1 tree ──────────
+    # Unlike V1 claimers, V2 already paid them BOTH R0 and R1 shares, so
+    # there is no "re-entry via R1" carve-out. They must be zero.
+    print("INV1b: V2-claimers must be fully absent from V2.1 (no R1 re-entry allowed)")
+    leak_v2u = sorted(v2u_set & set(usdc_idx))
+    leak_v2w = sorted(v2w_set & set(weth_idx))
+    check(
+        f"USDC: 0 of {len(v2u_set)} V2 claimers in V2.1 tree",
+        len(leak_v2u) == 0,
+        f"leaks={leak_v2u[:3]}",
+    )
+    check(
+        f"WETH: 0 of {len(v2w_set)} V2 claimers in V2.1 tree",
+        len(leak_v2w) == 0,
+        f"leaks={leak_v2w[:3]}",
+    )
+    print()
+
+    # ─── INV2 (G8 + G9): WQ users present, with V1/V2 claimer carve-outs ─
     print("INV2 (G8+G9): WQ users from withdraw-queue-resolved.json present in V2.1")
-    print("              (V1-claimers excluded — their WQ portion was settled by V1 claim)")
+    print("              (V1 AND V2 claimers excluded — their WQ portion was already settled)")
+    claimed_any_u = v1u_set | v2u_set
+    claimed_any_w = v1w_set | v2w_set
     wq_eth = {a.lower() for a in wq_resolved["eth"]["perUser"].keys()}
     wq_usd = {a.lower() for a in wq_resolved["usd"]["perUser"].keys()}
-    expected_wq_eth = wq_eth - v1w_set
-    expected_wq_usd = wq_usd - v1u_set
+    expected_wq_eth = wq_eth - claimed_any_w
+    expected_wq_usd = wq_usd - claimed_any_u
     missing_wq_eth = sorted(expected_wq_eth - set(weth_idx))
     missing_wq_usd = sorted(expected_wq_usd - set(usdc_idx))
-    excluded_wq_eth = wq_eth & v1w_set
-    excluded_wq_usd = wq_usd & v1u_set
+    excluded_wq_eth = wq_eth & claimed_any_w
+    excluded_wq_usd = wq_usd & claimed_any_u
     check(
         f"WQ-ETH: {len(expected_wq_eth)} expected (of {len(wq_eth)} total, "
-        f"{len(excluded_wq_eth)} V1-claimer-excluded)",
+        f"{len(excluded_wq_eth)} V1/V2-claimer-excluded)",
         len(missing_wq_eth) == 0,
         f"missing={missing_wq_eth[:3]}",
     )
     check(
         f"WQ-USD: {len(expected_wq_usd)} expected (of {len(wq_usd)} total, "
-        f"{len(excluded_wq_usd)} V1-claimer-excluded)",
+        f"{len(excluded_wq_usd)} V1/V2-claimer-excluded)",
         len(missing_wq_usd) == 0,
         f"missing={missing_wq_usd[:3]}",
     )
     print()
 
-    # ─── INV3 (G10): 9mm LP holders present, with V1-claimer carve-out ────
+    # ─── INV3 (G10): 9mm LP holders present, with V1/V2 claimer carve-outs
     print("INV3 (G10): 9mm LP holders from 9mm-resolved.json present in V2.1 WETH tree")
     nine_users = {a.lower() for a in nine_mm["perUser"].keys()}
-    expected_nine = nine_users - v1w_set
+    expected_nine = nine_users - claimed_any_w
     missing_nine = sorted(expected_nine - set(weth_idx))
-    excluded_nine = nine_users & v1w_set
+    excluded_nine = nine_users & claimed_any_w
     check(
         f"9mm: {len(expected_nine)} expected (of {len(nine_users)} total, "
-        f"{len(excluded_nine)} V1-claimer-excluded)",
+        f"{len(excluded_nine)} V1/V2-claimer-excluded)",
         len(missing_nine) == 0,
         f"missing={missing_nine[:3]}",
     )
     print()
 
-    # ─── INV4: tree sums match V1 pot totals exactly ─────────────────────
-    print("INV4: tree sums match V1 pot totals exactly (Step 12 normalization landed)")
+    # ─── INV4: tree sums match V2.1 target totals exactly ────────────────
+    print("INV4: tree sums match V2.1 target totals exactly (V2 wind-down amounts)")
     sum_u = sum(usdc_idx.values())
     sum_w = sum(weth_idx.values())
     check(
-        f"sum(USDC leaves) == V1_USDC ({sum_u} vs {V1_USDC})",
-        sum_u == V1_USDC,
-        f"delta={sum_u - V1_USDC}",
+        f"sum(USDC leaves) == TARGET_USDC ({sum_u} vs {TARGET_USDC})",
+        sum_u == TARGET_USDC,
+        f"delta={sum_u - TARGET_USDC}",
     )
     check(
-        f"sum(WETH leaves) == V1_WETH ({sum_w} vs {V1_WETH})",
-        sum_w == V1_WETH,
-        f"delta={sum_w - V1_WETH}",
+        f"sum(WETH leaves) == TARGET_WETH ({sum_w} vs {TARGET_WETH})",
+        sum_w == TARGET_WETH,
+        f"delta={sum_w - TARGET_WETH}",
     )
     print()
 
@@ -265,8 +293,8 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print("GROUP B PASSED: all 7 invariants verified")
-    print(f"  V2.1 USDC tree: {len(usdc_idx):4d} leaves, sum=${V1_USDC/1e6:,.2f} (exact)")
-    print(f"  V2.1 WETH tree: {len(weth_idx):4d} leaves, sum={V1_WETH/1e18:,.6f} WETH (exact)")
+    print(f"  V2.1 USDC tree: {len(usdc_idx):4d} leaves, sum=${TARGET_USDC/1e6:,.2f} (exact)")
+    print(f"  V2.1 WETH tree: {len(weth_idx):4d} leaves, sum={TARGET_WETH/1e18:,.6f} WETH (exact)")
     return 0
 
 

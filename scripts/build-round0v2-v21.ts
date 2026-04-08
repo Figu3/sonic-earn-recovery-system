@@ -42,8 +42,21 @@ const USDC_POT_R0     = 600_116_076_557n;
 const WETH_POT_R0     = 623_066_129_877_001_393_497n;
 const USDC_POT_R1     = 39_016_824_941n;
 const WETH_POT_R1     = 15_646_390_759_667_050_822n;
+// Original V1 pot totals (the amounts V2 was funded with).
+// Kept for reference — not used as the target total anymore, see TARGET_* below.
 const V1_USDC         = 370_052_027_675n;
 const V1_WETH         = 342_400_797_390_971_049_123n;
+
+// V2.1 target totals = V1 pot MINUS what was already claimed on V2 before pause.
+// Derived from V2's live round state at the moment of pause (see
+// scripts/output/round0-claimed-v2.json#{usdc,weth}.claimedOnChain):
+//   V2 usdcClaimed = 21_163_994_087       -> TARGET_USDC = V1_USDC - claimed
+//   V2 wethClaimed = 16_377_192_906_958_998_703 -> TARGET_WETH = V1_WETH - claimed
+// These are also exactly the amounts the admin Safe rescued from V2 in the
+// wind-down, so V2.1 can be funded 1:1 from the admin Safe with zero
+// treasury top-up.
+const TARGET_USDC     = 348_888_033_588n;                // V1_USDC  - 21_163_994_087
+const TARGET_WETH     = 326_023_604_484_012_050_420n;    // V1_WETH  - 16_377_192_906_958_998_703
 
 // Addresses to drop — protocol contracts resolved via merkle-round1
 const ROUND1_RESOLVED_PROTOCOL_CONTRACTS = new Set(
@@ -420,14 +433,24 @@ function main() {
     console.log(`  sum WETH (pre-round1, pre-claimed) = ${w}`);
   }
 
-  // Step 10 (REORDERED): Drop claimed addresses FIRST, then merge round1.
-  // This matches build-round0v2.ts ordering so that claimed users who are
-  // also round1 protocol depositors re-enter with their R1 share only
-  // (they forfeited their R0 direct share by claiming V1).
-  console.log("\n--- Step 10: drop claimed addresses (before round1 merge) ---");
-  const claimed = JSON.parse(fs.readFileSync(OUT("round0-claimed.json"), "utf8"));
-  const usdcClaimed = new Set<string>((claimed.usdc.claimedAddresses as string[]).map((a) => a.toLowerCase()));
-  const wethClaimed = new Set<string>((claimed.weth.claimedAddresses as string[]).map((a) => a.toLowerCase()));
+  // Step 10: Drop V1 claimers BEFORE merging round1.
+  // This matches build-round0v2.ts ordering so that V1-claimed users who
+  // are also round1 protocol depositors re-enter with their R1 share only
+  // (they forfeited their R0 direct share by claiming on V1 but still
+  // have a legitimate R1 protocol-distribution share). This is design
+  // intent, enforced by Step 10 / Step 11 ordering.
+  //
+  // V2 claimers are dropped AFTER the R1 merge (Step 11b below), because
+  // V2 already paid them for BOTH their R0 direct share AND their R1
+  // protocol share (V2's tree was the full R0 rebuild + R1 merge minus
+  // V1-claimers). Re-adding them in Step 11 would double-pay the R1
+  // portion, so the V2-claimer drop must come AFTER the merge.
+  console.log("\n--- Step 10: drop V1 claimers (before round1 merge) ---");
+  const claimedV1 = JSON.parse(fs.readFileSync(OUT("round0-claimed.json"), "utf8"));
+  const usdcClaimed = new Set<string>((claimedV1.usdc.claimedAddresses as string[]).map((a) => a.toLowerCase()));
+  const wethClaimed = new Set<string>((claimedV1.weth.claimedAddresses as string[]).map((a) => a.toLowerCase()));
+  console.log(`  V1 USDC claimers: ${usdcClaimed.size}`);
+  console.log(`  V1 WETH claimers: ${wethClaimed.size}`);
   let dropUsdc = 0, dropUsdcAmt = 0n;
   for (const a of usdcClaimed) {
     const v = usdcAbs.get(a);
@@ -471,6 +494,33 @@ function main() {
   };
   mergeRound1(OUT("merkle-round1-usdc.json"), USDC_POT_R1, usdNum, STKSC_USD_TOTAL, usdcAbs, "USDC");
   mergeRound1(OUT("merkle-round1-weth.json"), WETH_POT_R1, ethNum, STKSC_ETH_TOTAL, wethAbs, "WETH");
+
+  // Step 11b: Drop V2 claimers AFTER the R1 merge.
+  // V2 already paid them BOTH their R0 direct share AND their R1 protocol
+  // share (V2's tree = R0 rebuild + R1 merge - V1-claimers). Re-adding them
+  // in Step 11 would double-pay the R1 portion, so the V2-claimer drop must
+  // come AFTER the merge. Unlike Step 10 (V1 claimers), there is no "re-entry
+  // via R1" carve-out here — V2 claimers are fully excluded from V2.1.
+  console.log("\n--- Step 11b: drop V2 claimers (after round1 merge, full exclusion) ---");
+  const claimedV2 = JSON.parse(fs.readFileSync(OUT("round0-claimed-v2.json"), "utf8"));
+  const usdcClaimedV2 = new Set<string>(
+    (claimedV2.usdc.claimedAddresses as string[]).map((a) => a.toLowerCase()),
+  );
+  const wethClaimedV2 = new Set<string>(
+    (claimedV2.weth.claimedAddresses as string[]).map((a) => a.toLowerCase()),
+  );
+  let dropV2Usdc = 0, dropV2UsdcAmt = 0n;
+  for (const a of usdcClaimedV2) {
+    const v = usdcAbs.get(a);
+    if (v !== undefined) { dropV2UsdcAmt += v; usdcAbs.delete(a); dropV2Usdc++; }
+  }
+  let dropV2Weth = 0, dropV2WethAmt = 0n;
+  for (const a of wethClaimedV2) {
+    const v = wethAbs.get(a);
+    if (v !== undefined) { dropV2WethAmt += v; wethAbs.delete(a); dropV2Weth++; }
+  }
+  console.log(`  dropped ${dropV2Usdc}/${usdcClaimedV2.size} USDC V2-claimed (amt=${dropV2UsdcAmt})`);
+  console.log(`  dropped ${dropV2Weth}/${wethClaimedV2.size} WETH V2-claimed (amt=${dropV2WethAmt})`);
 
   // Step 12: Build final entry lists
   console.log("\n--- Step 12: build merkle trees ---");
@@ -581,13 +631,15 @@ function main() {
     return { newTotal, leafCount: finals.length, root };
   };
 
-  const u = buildTree(usdcAbs, "USDC", OUT("merkle-round0v2-v2.1-usdc.json"), V1_USDC);
-  const w = buildTree(wethAbs, "WETH", OUT("merkle-round0v2-v2.1-weth.json"), V1_WETH);
+  const u = buildTree(usdcAbs, "USDC", OUT("merkle-round0v2-v2.1-usdc.json"), TARGET_USDC);
+  const w = buildTree(wethAbs, "WETH", OUT("merkle-round0v2-v2.1-weth.json"), TARGET_WETH);
 
-  // Step 13: Reconcile vs V1 pot balances
-  console.log("\n=== RECONCILIATION vs V1 balances ===");
-  console.log(`USDC: V1=${V1_USDC}  newTotal=${u.newTotal}  delta=${V1_USDC - u.newTotal}  (${Number(V1_USDC - u.newTotal) / 1e6} USDC)`);
-  console.log(`WETH: V1=${V1_WETH}  newTotal=${w.newTotal}  delta=${V1_WETH - w.newTotal}  (${Number(V1_WETH - w.newTotal) / 1e18} WETH)`);
+  // Step 13: Reconcile vs the V2 wind-down balances (what the admin Safe rescued)
+  console.log("\n=== RECONCILIATION vs V2 wind-down targets ===");
+  console.log(`USDC: target=${TARGET_USDC}  newTotal=${u.newTotal}  delta=${TARGET_USDC - u.newTotal}  (${Number(TARGET_USDC - u.newTotal) / 1e6} USDC)`);
+  console.log(`WETH: target=${TARGET_WETH}  newTotal=${w.newTotal}  delta=${TARGET_WETH - w.newTotal}  (${Number(TARGET_WETH - w.newTotal) / 1e18} WETH)`);
+  console.log(`  V1 pot was: USDC=${V1_USDC}  WETH=${V1_WETH}`);
+  console.log(`  V2 already paid out: USDC=${V1_USDC - TARGET_USDC}  WETH=${V1_WETH - TARGET_WETH}`);
   console.log(`  WETH delta includes Shadow CL dropped: ${shadowDroppedEth} stkscETH (≈ ${Number(shadowDroppedEth * WETH_POT_R0 / STKSC_ETH_TOTAL) / 1e18} WETH)`);
 
   // Step 14: Diff vs existing broken V2 trees

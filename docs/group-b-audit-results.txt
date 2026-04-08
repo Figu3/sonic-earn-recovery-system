@@ -1,39 +1,43 @@
 ========================================================================
 Phase G — Group B: Round 0v2 V2.1 merkle tree-content audit (v2)
 ========================================================================
-  USDC tree: 5788 leaves, target $370,052.03, declared total $370,052.03
-  WETH tree: 1127 leaves, target 342.4008 WETH, declared total 342.4008 WETH
+  USDC tree: 5745 leaves, target $348,888.03, declared total $348,888.03
+  WETH tree: 1118 leaves, target 326.0236 WETH, declared total 326.0236 WETH
 
-INV1 (G1+G11): V1-claimers in V2.1 must come from the R1-merge path only
+INV1a (G1+G11): V1-claimers in V2.1 must come from the R1-merge path only
   PASS  USDC: 13 V1 claimers in V2.1, 13 also in R1 (no orphans)
   PASS  WETH: 1 V1 claimers in V2.1, 1 also in R1 (no orphans)
 
+INV1b: V2-claimers must be fully absent from V2.1 (no R1 re-entry allowed)
+  PASS  USDC: 0 of 43 V2 claimers in V2.1 tree
+  PASS  WETH: 0 of 9 V2 claimers in V2.1 tree
+
 INV2 (G8+G9): WQ users from withdraw-queue-resolved.json present in V2.1
-              (V1-claimers excluded — their WQ portion was settled by V1 claim)
-  PASS  WQ-ETH: 10 expected (of 11 total, 1 V1-claimer-excluded)
-  PASS  WQ-USD: 28 expected (of 29 total, 1 V1-claimer-excluded)
+              (V1 AND V2 claimers excluded — their WQ portion was already settled)
+  PASS  WQ-ETH: 10 expected (of 11 total, 1 V1/V2-claimer-excluded)
+  PASS  WQ-USD: 28 expected (of 29 total, 1 V1/V2-claimer-excluded)
 
 INV3 (G10): 9mm LP holders from 9mm-resolved.json present in V2.1 WETH tree
-  PASS  9mm: 7 expected (of 7 total, 0 V1-claimer-excluded)
+  PASS  9mm: 7 expected (of 7 total, 0 V1/V2-claimer-excluded)
 
-INV4: tree sums match V1 pot totals exactly (Step 12 normalization landed)
-  PASS  sum(USDC leaves) == V1_USDC (370052027675 vs 370052027675)
-  PASS  sum(WETH leaves) == V1_WETH (342400797390971049123 vs 342400797390971049123)
+INV4: tree sums match V2.1 target totals exactly (V2 wind-down amounts)
+  PASS  sum(USDC leaves) == TARGET_USDC (348888033588 vs 348888033588)
+  PASS  sum(WETH leaves) == TARGET_WETH (326023604484012050420 vs 326023604484012050420)
 
 INV5: no zero-amount leaves (no griefable slots)
   PASS  USDC: 0 zero-amount leaves
   PASS  WETH: 0 zero-amount leaves
 
 INV6: leafCount metadata == len(entries)
-  PASS  USDC leafCount == len(entries) (5788 vs 5788)
-  PASS  WETH leafCount == len(entries) (1127 vs 1127)
+  PASS  USDC leafCount == len(entries) (5745 vs 5745)
+  PASS  WETH leafCount == len(entries) (1118 vs 1118)
 
 INV7: payoutSum + payoutDustWei == sum(amount)
       (payoutSum = post-shareWad-quantization; dust = rounding loss)
-  PASS  USDC: 370052024993 + 2682 == 370052027675  (dust=$0.002682)
-  PASS  WETH: 342400797390971048552 + 571 == 342400797390971049123  (dust=0.000000000000000571 ETH)
+  PASS  USDC: 348888030861 + 2727 == 348888033588  (dust=$0.002727)
+  PASS  WETH: 326023604484012049849 + 571 == 326023604484012050420  (dust=0.000000000000000571 ETH)
 
 ========================================================================
 GROUP B PASSED: all 7 invariants verified
-  V2.1 USDC tree: 5788 leaves, sum=$370,052.03 (exact)
-  V2.1 WETH tree: 1127 leaves, sum=342.400797 WETH (exact)
+  V2.1 USDC tree: 5745 leaves, sum=$348,888.03 (exact)
+  V2.1 WETH tree: 1118 leaves, sum=326.023604 WETH (exact)

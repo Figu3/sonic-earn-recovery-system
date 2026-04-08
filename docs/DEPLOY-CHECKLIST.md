@@ -16,112 +16,96 @@ before moving on.
 
 ## Phase 0 — Freeze V2 state
 
-- [x] **0.1** Queue `v2.pause()` Safe tx
-  - calldata: `0x8456cb59`
-  - verify: `cast call $V2 "paused()(bool)" --rpc-url $RPC` → `true`
+- [x] **0.1** `v2.pause()` — confirmed on-chain, `paused() == true`
 
 ## Phase 1 — Wind down V2 funds into the admin Safe
 
 **Goal:** after this phase, V2 holds zero USDC and zero WETH; the admin
-Safe holds `348,899,406,347` extra USDC units and `326,024,027,675,757,771,426`
-extra WETH wei (≈ $348,899.41 + 326.024 WETH).
+Safe holds `348,888,033,588` extra USDC units and `326,023,604,484,012,050,420`
+extra WETH wei (≈ $348,888.03 + 326.0236 WETH). Note: amounts are slightly
+lower than the initial quote because some users claimed on V2 between
+Phase 0 pause queueing and the pause actually landing. The snapshot in
+Phase 2 captured the final state.
 
-- [ ] **1.1** Queue `v2.deactivateRound(0)` Safe tx
-  - to: `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31`
-  - value: `0`
-  - calldata: `0xf16255340000000000000000000000000000000000000000000000000000000000000000`
-  - post-verify:
-    ```
-    cast call $V2 "totalUsdcAllocated()(uint256)" --rpc-url $RPC  # == 0
-    cast call $V2 "totalWethAllocated()(uint256)" --rpc-url $RPC  # == 0
-    ```
+- [x] **1.1** `v2.deactivateRound(0)` — confirmed on-chain
+  - `totalUsdcAllocated == 0`, `totalWethAllocated == 0`
+  - `round.active == false`
 
-- [ ] **1.2** Queue `v2.rescueToken(USDC, adminSafe, 348899406347)` Safe tx
-  - to: `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31`
-  - value: `0`
-  - calldata:
-    ```
-    0xe5711e8b00000000000000000000000029219dd400f2bf60e5a23d13be72b486d40388940000000000000000000000002b93eb843a54fa3ecacb5a72a69dcb666b262069000000000000000000000000000000000000000000000000000000513c06720b
-    ```
-
-- [ ] **1.3** Queue `v2.rescueToken(WETH, adminSafe, 326024027675757771426)` Safe tx
+- [ ] **1.2** Queue `v2.rescueToken(USDC, adminSafe, 348888033588)` Safe tx
+  *(SIGNING IN PROGRESS — waiting for co-signers)*
   - to: `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31`
   - value: `0`
   - calldata:
     ```
-    0xe5711e8b00000000000000000000000050c42deacd8fc9773493ed674b675be577f2634b0000000000000000000000002b93eb843a54fa3ecacb5a72a69dcb666b262069000000000000000000000000000000000000000000000011ac7e05d25fa9faa2
+    0xe5711e8b00000000000000000000000029219dd400f2bf60e5a23d13be72b486d40388940000000000000000000000002b93eb843a54fa3ecacb5a72a69dcb666b262069000000000000000000000000000000000000000000000000000000513b58e934
+    ```
+
+- [ ] **1.3** Queue `v2.rescueToken(WETH, adminSafe, 326023604484012050420)` Safe tx
+  *(SIGNING IN PROGRESS — waiting for co-signers)*
+  - to: `0x6472D708cD88C7DD94e77A5c5023dA6FDc41Ad31`
+  - value: `0`
+  - calldata:
+    ```
+    0xe5711e8b00000000000000000000000050c42deacd8fc9773493ed674b675be577f2634b0000000000000000000000002b93eb843a54fa3ecacb5a72a69dcb666b262069000000000000000000000000000000000000000000000011ac7c84ee5dfd07f4
     ```
 
 - [ ] **1.4** Post-phase-1 verification
   ```
   cast call $USDC "balanceOf(address)(uint256)" $V2        --rpc-url $RPC  # == 0
   cast call $WETH "balanceOf(address)(uint256)" $V2        --rpc-url $RPC  # == 0
-  cast call $USDC "balanceOf(address)(uint256)" $ADMIN_SAFE --rpc-url $RPC  # prior + 348899406347
-  cast call $WETH "balanceOf(address)(uint256)" $ADMIN_SAFE --rpc-url $RPC  # prior + 326024027675757771426
+  cast call $USDC "balanceOf(address)(uint256)" $ADMIN_SAFE --rpc-url $RPC  # prior + 348888033588
+  cast call $WETH "balanceOf(address)(uint256)" $ADMIN_SAFE --rpc-url $RPC  # prior + 326023604484012050420
   ```
-
-**Tip:** If your Safe supports batching, do 1.1 + 1.2 + 1.3 in a single
-multi-send tx (one signing round instead of three).
 
 ---
 
 ## Phase 2 — Snapshot V2 claim state and rebuild the V2.1 tree
 
-The currently committed V2.1 tree assumes the full V1 pot. After V2
-claims (~$21,152 USDC + 16.38 WETH already paid out) and the Phase 1
-wind-down, the new tree must:
-  - drop every V2 claimer (to prevent double-claim), and
-  - size the totals to the actual funds the admin Safe will redeposit.
+- [x] **2.1** `scripts/snapshot-v2-claims.ts` written and run
+  - **43 USDC claimers** + **9 WETH claimers** captured from V2
+  - Reconciliation delta = **0** on both sides (sum of computed amounts
+    == `v2.rounds(0).{usdcClaimed,wethClaimed}` exactly)
+  - Output: `scripts/output/round0-claimed-v2.json`
 
-- [ ] **2.1** Write `scripts/snapshot-v2-claims.ts`
-  - Pull `UsdcClaimed(uint256,address,uint256)` and
-    `WethClaimed(uint256,address,uint256)` events from V2 between its
-    deploy block and latest.
-  - Write `scripts/output/round0-claimed-v2.json` matching the shape of
-    `round0-claimed.json`: `{ v2, paused, usdc: { total, claimedOnChain,
-    claimedAddresses[] }, weth: { ... } }`.
-  - Sanity: sum of event amounts MUST equal `v2.rounds(0).usdcClaimed`
-    and `v2.rounds(0).wethClaimed` exactly. If not, the event scan
-    missed something — do not proceed.
+- [x] **2.2** `scripts/build-round0v2-v21.ts` patched
+  - Added `TARGET_USDC = 348_888_033_588` and
+    `TARGET_WETH = 326_023_604_484_012_050_420`
+  - Step 10 (V1 claimer drop, before R1 merge) — unchanged
+  - **Step 11b (NEW)** — V2 claimer drop, **after** R1 merge, full
+    exclusion. Design rationale: V2 already paid V2-claimers both
+    their R0 direct share AND their R1 protocol share, so there is no
+    R1 re-entry carve-out (unlike V1 claimers).
+  - `buildTree` now uses `TARGET_*` totals
 
-- [ ] **2.2** Patch `scripts/build-round0v2-v21.ts`
-  - Change the pot constants to the V2 wind-down balances:
-    ```ts
-    const V1_USDC = 348_899_406_347n;          // V2 balance post-claims, pre-wind-down
-    const V1_WETH = 326_024_027_675_757_771_426n;
-    ```
-    (Consider renaming `V1_*` → `TARGET_*` for clarity.)
-  - In Step 10, union `round0-claimed.json.{usdc,weth}.claimedAddresses`
-    with `round0-claimed-v2.json.{usdc,weth}.claimedAddresses`.
+- [x] **2.3** Build re-run — **NEW MERKLE ROOTS**:
+  - **USDC root:** `0x21ab37dc48d1d13fe9dafc04db13be01f628cbf7dbbfcb5fdbfc3ddd3d539fe0`
+  - **WETH root:** `0x7be1d2af458a586617ce6b56f46df727b68c022729aaf3b11a553b004941c14b`
+  - **USDC leaves:** 5,745
+  - **WETH leaves:** 1,118
+  - **USDC total:** `348,888,033,588` ($348,888.03) — matches target delta=0
+  - **WETH total:** `326,023,604,484,012,050,420` (326.0236 WETH) — matches target delta=0
 
-- [ ] **2.3** Re-run the build
-  ```
-  cd scripts && npx tsx build-round0v2-v21.ts
-  ```
-  Record the new merkle roots here:
-  - USDC root: `________________________________________________________________`
-  - WETH root: `________________________________________________________________`
-  - USDC leaves: `_____`
-  - WETH leaves: `_____`
+- [x] **2.4** `scripts/audit-r0v2-tree.py` extended
+  - New **INV1b**: V2 claimers must be fully absent from V2.1 (no R1 re-entry)
+  - **INV2 / INV3** use `v1 ∪ v2` claimer set for WQ / 9mm carve-outs
+  - **INV4** uses `TARGET_USDC / TARGET_WETH` not V1 pot
 
-- [ ] **2.4** Extend `scripts/audit-r0v2-tree.py`
-  - INV1 must union V1 + V2 claimers when checking the no-orphan
-    re-entry invariant.
+- [x] **2.5** Audit re-run — **7/7 invariants PASS**
+  - INV1a USDC: 13 V1 claimers in tree (all in R1, no orphans) ✓
+  - INV1a WETH: 1 V1 claimer in tree (in R1, no orphans) ✓
+  - INV1b USDC: 0/43 V2 claimers in tree ✓
+  - INV1b WETH: 0/9 V2 claimers in tree ✓
+  - INV2 WQ-ETH: 10/10, WQ-USD: 28/28 present ✓
+  - INV3 9mm: 7/7 present ✓
+  - INV4 USDC sum == 348,888,033,588 (delta=0) ✓
+  - INV4 WETH sum == 326,023,604,484,012,050,420 (delta=0) ✓
+  - INV5: 0 zero-amount leaves on both sides ✓
+  - INV6: leafCount metadata matches (5745 / 1118) ✓
+  - INV7: `payoutSum + dust == sum(amount)` both sides ✓
 
-- [ ] **2.5** Re-run the audit
-  ```
-  python3 scripts/audit-r0v2-tree.py
-  ```
-  Expected: `GROUP B PASSED: all 7 invariants verified`
+- [x] **2.6** Phase G Group A re-run — **8/8 PASS** (G2, G3, G4, G5, G6, G7, G12, PH)
 
-- [ ] **2.6** Re-run Phase G Group A (regression check)
-  ```
-  forge test --match-contract ForkV21Waiver --skip script
-  ```
-  Expected: `8 passed; 0 failed; 0 skipped`
-
-- [ ] **2.7** Commit & push the new trees, build-script diff, audit-script
-      diff, and new snapshot output.
+- [ ] **2.7** Commit & push Phase 2 changes
 
 ---
 
