@@ -20,6 +20,10 @@ scripts/output/*
 !scripts/output/merkle-round1-usdc.json
 !scripts/output/merkle-round1-weth.json
 !scripts/output/round1-resolved-depositors.json
+# V2.1 rebuild artifacts (Phase E)
+!scripts/output/merkle-round0v2-v2.1-usdc.json
+!scripts/output/merkle-round0v2-v2.1-weth.json
+!scripts/output/merkle-round0v2-v2.1-diff.json
 
 # OS
 .DS_Store
