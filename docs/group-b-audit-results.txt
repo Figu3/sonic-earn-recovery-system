@@ -1,0 +1,33 @@
+========================================================================
+Phase G — Group B: Round 0v2 V2.1 merkle tree-content audit
+========================================================================
+  USDC tree: 5806 leaves, total $370,052.03
+  WETH tree: 1127 leaves, total 342.4008 WETH
+
+G1+G11: V1-claimed addresses MUST be absent from V2.1 trees
+  V1 USDC claimers: 187
+  V1 WETH claimers: 105
+  FAIL: G1/G11 USDC: 13 V1 claimers still in V2.1 USDC tree (e.g. ['0x097adbe246858a0fa8f9492889ae00fd87638044', '0x0b997e226b63fded87673bc8b43ba24477b8147a', '0x1a5a04171dc7143afe49870fcda9c875e5f86f38'])
+  FAIL: G1/G11 WETH: 1 V1 claimers still in V2.1 WETH tree (e.g. ['0x097adbe246858a0fa8f9492889ae00fd87638044'])
+
+G8: WQ-ETH pending users MUST be in V2.1 WETH tree at exact rate-derived payout
+  WQ-ETH pending entries: 11
+  FAIL: G8: 1 WQ-ETH addresses absent from V2.1 WETH tree (e.g. ['0x5877022fe1a776e5275ed535b50d83a69634089c'])
+  FAIL: G8: 10 WQ-ETH amount mismatches > 1 wei (e.g. [('0xdd11d5db35f52110d6c6a03778e2f822b1f79a0e', 2656366410447902773, 2646090682147786637), ('0xb4ce0c954bb129d8039230f701bb6503dca1ee8c', 976264414562759825, 1907646468412479213), ('0x1db383f83b61e5ab316366c2b1ab12d6d0f25eaa', 465797669131155854, 463995805400311417)])
+
+G9: WQ-USD pending users MUST be in V2.1 USDC tree at exact rate-derived payout
+  WQ-USD pending entries: 29
+  FAIL: G9: 29 WQ-USD amount mismatches > 1 unit (e.g. [('0x0272c1825bbfa8b029ac093bf3a942dcabd75fe0', 956579360, 953321381), ('0x98d45a7bb59cf6a5dbe9abffc4c397d082adcc2f', 481839511, 480198431), ('0x55fa5ac048a0834dec255b70da4fde6f8a64d519', 389980507, 388652286)])
+
+G10: 9mm LP holders MUST be present in V2.1 WETH tree (>= pro-rata share)
+  9mm LP holders: 7
+  FAIL: G10: 7 9mm LP holders receive LESS than their pro-rata share (e.g. [('0xe4b4bd760dcd2d791db7f731be21361ddef24a95', 43902650424339406, 20281646850896454), ('0xac2d528ed9add1ed761ac06bab3dd8fb40792189', 3123952626169541, 1443245372364556), ('0x39915ad3f74a214da51bfebaf38ef866f682200b', 2945031862922795, 1360512306913371)])
+
+========================================================================
+GROUP B FAILED: 6 check(s) did not pass
+  - G1/G11 USDC: 13 V1 claimers still in V2.1 USDC tree (e.g. ['0x097adbe246858a0fa8f9492889ae00fd87638044', '0x0b997e226b63fded87673bc8b43ba24477b8147a', '0x1a5a04171dc7143afe49870fcda9c875e5f86f38'])
+  - G1/G11 WETH: 1 V1 claimers still in V2.1 WETH tree (e.g. ['0x097adbe246858a0fa8f9492889ae00fd87638044'])
+  - G8: 1 WQ-ETH addresses absent from V2.1 WETH tree (e.g. ['0x5877022fe1a776e5275ed535b50d83a69634089c'])
+  - G8: 10 WQ-ETH amount mismatches > 1 wei (e.g. [('0xdd11d5db35f52110d6c6a03778e2f822b1f79a0e', 2656366410447902773, 2646090682147786637), ('0xb4ce0c954bb129d8039230f701bb6503dca1ee8c', 976264414562759825, 1907646468412479213), ('0x1db383f83b61e5ab316366c2b1ab12d6d0f25eaa', 465797669131155854, 463995805400311417)])
+  - G9: 29 WQ-USD amount mismatches > 1 unit (e.g. [('0x0272c1825bbfa8b029ac093bf3a942dcabd75fe0', 956579360, 953321381), ('0x98d45a7bb59cf6a5dbe9abffc4c397d082adcc2f', 481839511, 480198431), ('0x55fa5ac048a0834dec255b70da4fde6f8a64d519', 389980507, 388652286)])
+  - G10: 7 9mm LP holders receive LESS than their pro-rata share (e.g. [('0xe4b4bd760dcd2d791db7f731be21361ddef24a95', 43902650424339406, 20281646850896454), ('0xac2d528ed9add1ed761ac06bab3dd8fb40792189', 3123952626169541, 1443245372364556), ('0x39915ad3f74a214da51bfebaf38ef866f682200b', 2945031862922795, 1360512306913371)])

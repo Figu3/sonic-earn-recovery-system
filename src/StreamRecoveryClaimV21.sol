@@ -282,6 +282,13 @@ contract StreamRecoveryClaimV21 is EIP712 {
     ///      claimant — there is no delegated-signer path, matching V2 semantics.
     function signWaiver(bytes calldata signature) external whenNotPaused {
         if (hasSignedWaiver[msg.sender]) revert AlreadySigned();
+        // Reject empty payloads explicitly. There is no legitimate use case
+        // for a 0-byte waiver signature in this contract: the ECDSA path
+        // requires exactly 65 bytes, and the ERC-1271 fallback should always
+        // receive a real signature blob (not a degenerate "approve via empty
+        // bytes" path). Phase H hardening — closes the only finding that
+        // touched the V2.1 diff itself.
+        if (signature.length == 0) revert InvalidSignature();
 
         bytes32 digest = _waiverDigest(msg.sender);
 

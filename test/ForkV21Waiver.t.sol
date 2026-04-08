@@ -210,9 +210,11 @@ contract ForkV21WaiverTest is Test {
         erc1271.approve(digest);
 
         // Any non-65-byte payload (or one that fails ECDSA recovery) routes to
-        // the ERC-1271 fallback. We use a 0-byte payload — Mock1271 ignores the
-        // signature contents and only checks `approved[digest]`.
-        bytes memory sig = "";
+        // the ERC-1271 fallback. We use a non-empty dummy payload — Mock1271
+        // ignores the signature contents and only checks `approved[digest]`.
+        // V2.1 explicitly rejects 0-byte payloads (Phase H hardening), so the
+        // payload must be at least 1 byte.
+        bytes memory sig = hex"deadbeef";
 
         vm.prank(address(erc1271));
         v21.signWaiver(sig);
@@ -297,6 +299,16 @@ contract ForkV21WaiverTest is Test {
     function test_G6_safe_4ofN_sign_then_claim() public {
         _runSafeCase(SAFE_4, 4, IDX_SAFE_4);
         emit log_string("  G6 PASS: 4-of-N Safe variable-length bundle -> claim succeeds");
+    }
+
+    // ─── PH: Phase H hardening — empty signature must revert ───────────
+    function test_PH_empty_signature_reverts() public {
+        bytes memory sig = "";
+        vm.prank(aliceEoa);
+        vm.expectRevert(StreamRecoveryClaimV21.InvalidSignature.selector);
+        v21.signWaiver(sig);
+        assertFalse(v21.hasSignedWaiver(aliceEoa), "waiver must NOT be set");
+        emit log_string("  PH PASS: empty signature rejected by Phase H hardening");
     }
 }
 
