@@ -88,7 +88,55 @@
     ],
     "removed": [
       {
+        "addr": "0x0ca78ed9f48dfc2dbbff9e1d55227e52359776f0",
+        "amt": "1"
+      },
+      {
+        "addr": "0x35de702b01962dbfcbc4a6738dadb09e1986b650",
+        "amt": "1"
+      },
+      {
+        "addr": "0x3a76f1ac8ed31ce686ab92ca0dea66297c855cf6",
+        "amt": "1"
+      },
+      {
+        "addr": "0x3b4632327b36641afd332924e3a7eb515fbb7b5d",
+        "amt": "1"
+      },
+      {
+        "addr": "0x42161b8c03dfdde87ee46d6c37ed1fc361e0fc52",
+        "amt": "1"
+      },
+      {
         "addr": "0x4a3a1f503f664a7df698355a0fb4a505def35a22",
+        "amt": "1"
+      },
+      {
+        "addr": "0x57f495e7be0a4924d0d57e8ade16bbb2eb7bc398",
+        "amt": "1"
+      },
+      {
+        "addr": "0x67e1996b2d280400c4314a96c41aab927c24875d",
+        "amt": "1"
+      },
+      {
+        "addr": "0x7788ea4ce2b1eac4d6e25790bfe6d3d537cce53a",
+        "amt": "1"
+      },
+      {
+        "addr": "0x77e0bf0c85212a34f127cd728696cddfccc82eaf",
+        "amt": "1"
+      },
+      {
+        "addr": "0x7982eb931808561596a121b9e379cd81af05fd8b",
+        "amt": "1"
+      },
+      {
+        "addr": "0x7b009f7b48b95620255cea115182eba0fe237fc8",
+        "amt": "2"
+      },
+      {
+        "addr": "0x7cf54c0b4b5c7c4c2f468c742991fee8809f2b08",
         "amt": "1"
       },
       {
@@ -96,7 +144,23 @@
         "amt": "1"
       },
       {
+        "addr": "0x919ef76c3df609ff88a7af13bf37540f0cb40ba5",
+        "amt": "1"
+      },
+      {
         "addr": "0xaf7ec0ecf1a3890340bd857176d9f872319d160e",
+        "amt": "1"
+      },
+      {
+        "addr": "0xba4f615f8979bff8ba72999d19b735fe8ad55739",
+        "amt": "1"
+      },
+      {
+        "addr": "0xcbef457ac80cbc692c80bf2bfaae125043d63e64",
+        "amt": "1"
+      },
+      {
+        "addr": "0xd213fabd78ad5ca1e9c9dfa906650a6f02e052a0",
         "amt": "1"
       },
       {
@@ -110,6 +174,14 @@
       {
         "addr": "0xfd49ed203885f0f8a60d4fe6db99efc9e790d7f6",
         "amt": "1"
+      },
+      {
+        "addr": "0xfe0c96101c33b7951c6b4c44cef4d4dade45190c",
+        "amt": "1"
+      },
+      {
+        "addr": "0xfe40d0ca18ff425b6e5c0a38f016e0eebd7eab86",
+        "amt": "2"
       }
     ],
     "changed": [
@@ -1839,12 +1911,6 @@
         "addr": "0x0c9f1980e662952811837edd51dd8594726c574e",
         "old": "30",
         "new": "29",
-        "delta": "-1"
-      },
-      {
-        "addr": "0x0ca78ed9f48dfc2dbbff9e1d55227e52359776f0",
-        "old": "1",
-        "new": "0",
         "delta": "-1"
       },
       {
@@ -7434,12 +7500,6 @@
         "delta": "-47"
       },
       {
-        "addr": "0x35de702b01962dbfcbc4a6738dadb09e1986b650",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0x35e39b05ad4080a18a893d2b2737060ee313d80a",
         "old": "112157",
         "new": "111160",
@@ -8106,12 +8166,6 @@
         "delta": "-2"
       },
       {
-        "addr": "0x3a76f1ac8ed31ce686ab92ca0dea66297c855cf6",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0x3a7736e805dd55c66f76cbc3b358de8b660d0110",
         "old": "628652954",
         "new": "623064936",
@@ -8218,12 +8272,6 @@
         "old": "96688",
         "new": "95828",
         "delta": "-860"
-      },
-      {
-        "addr": "0x3b4632327b36641afd332924e3a7eb515fbb7b5d",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
       },
       {
         "addr": "0x3b4645fb65fd4baff4ac1425e876ab6fc6d8ed0f",
@@ -9118,12 +9166,6 @@
         "old": "691",
         "new": "684",
         "delta": "-7"
-      },
-      {
-        "addr": "0x42161b8c03dfdde87ee46d6c37ed1fc361e0fc52",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
       },
       {
         "addr": "0x421b0d8cce6f38fc8c4344a29e643da6cb85e4ef",
@@ -12042,12 +12084,6 @@
         "delta": "-2794"
       },
       {
-        "addr": "0x57f495e7be0a4924d0d57e8ade16bbb2eb7bc398",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0x57fda3cd8819feefdff357739df650c5b971262e",
         "old": "35391",
         "new": "35076",
@@ -14136,12 +14172,6 @@
         "delta": "-6"
       },
       {
-        "addr": "0x67e1996b2d280400c4314a96c41aab927c24875d",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0x6805870aa80f9c29a8550765d16c87415a5cc5c1",
         "old": "5832",
         "new": "5780",
@@ -16050,12 +16080,6 @@
         "delta": "-13"
       },
       {
-        "addr": "0x7788ea4ce2b1eac4d6e25790bfe6d3d537cce53a",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0x77984dc88aab3d9c843256d7aabdc82540c94f69",
         "old": "698",
         "new": "691",
@@ -16102,12 +16126,6 @@
         "old": "7295447",
         "new": "7230598",
         "delta": "-64849"
-      },
-      {
-        "addr": "0x77e0bf0c85212a34f127cd728696cddfccc82eaf",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
       },
       {
         "addr": "0x77e32993c54a1d417629aaf7e40240e650ca0e4d",
@@ -16356,12 +16374,6 @@
         "delta": "-586"
       },
       {
-        "addr": "0x7982eb931808561596a121b9e379cd81af05fd8b",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0x7984bc110f8f9c180934be2b8f14169ccb9ecd62",
         "old": "250",
         "new": "248",
@@ -16546,12 +16558,6 @@
         "old": "6286",
         "new": "6229",
         "delta": "-57"
-      },
-      {
-        "addr": "0x7b009f7b48b95620255cea115182eba0fe237fc8",
-        "old": "2",
-        "new": "0",
-        "delta": "-2"
       },
       {
         "addr": "0x7b168ad19ba1770ad74d703abb85fffcb7eea30e",
@@ -16768,12 +16774,6 @@
         "old": "3212205",
         "new": "3183651",
         "delta": "-28554"
-      },
-      {
-        "addr": "0x7cf54c0b4b5c7c4c2f468c742991fee8809f2b08",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
       },
       {
         "addr": "0x7cf666a3c3d7aec6e18de6b4ef0119808a7e8d5d",
@@ -19660,12 +19660,6 @@
         "old": "628652",
         "new": "623064",
         "delta": "-5588"
-      },
-      {
-        "addr": "0x919ef76c3df609ff88a7af13bf37540f0cb40ba5",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
       },
       {
         "addr": "0x91ac14c7d856a9b786e25b2d505efcaf6b5cb180",
@@ -25008,12 +25002,6 @@
         "delta": "-3"
       },
       {
-        "addr": "0xba4f615f8979bff8ba72999d19b735fe8ad55739",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0xba89d66ac9549e5aabb2e23528702cbb974bde68",
         "old": "12309",
         "new": "12199",
@@ -27630,12 +27618,6 @@
         "delta": "-427"
       },
       {
-        "addr": "0xcbef457ac80cbc692c80bf2bfaae125043d63e64",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0xcbf368bb3fa83d9b0624d3f83998b0d953cb4e61",
         "old": "628",
         "new": "622",
@@ -28426,12 +28408,6 @@
         "old": "50358",
         "new": "49910",
         "delta": "-448"
-      },
-      {
-        "addr": "0xd213fabd78ad5ca1e9c9dfa906650a6f02e052a0",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
       },
       {
         "addr": "0xd2156b876f2e75fe2283cb8f84f39612299d75ec",
@@ -34518,12 +34494,6 @@
         "delta": "-1066"
       },
       {
-        "addr": "0xfe0c96101c33b7951c6b4c44cef4d4dade45190c",
-        "old": "1",
-        "new": "0",
-        "delta": "-1"
-      },
-      {
         "addr": "0xfe16a3cffaae0f28f475c65c81ddcdb8d1ada6b0",
         "old": "6",
         "new": "5",
@@ -34552,12 +34522,6 @@
         "old": "6286567",
         "new": "6230686",
         "delta": "-55881"
-      },
-      {
-        "addr": "0xfe40d0ca18ff425b6e5c0a38f016e0eebd7eab86",
-        "old": "2",
-        "new": "0",
-        "delta": "-2"
       },
       {
         "addr": "0xfe41276563d480b438172ef12395f1d5812c28b9",
@@ -34825,7 +34789,7 @@
       }
     ],
     "oldLeaves": 5791,
-    "newLeaves": 5806
+    "newLeaves": 5788
   },
   "weth": {
     "added": [

@@ -504,7 +504,21 @@ function main() {
       console.log(`  normalized: added ${normDust} dust to ${normalized[largestIdx][0]} to hit target exactly`);
     }
     const newTotal = targetTotal;
-    const finalsPairs = normalized;
+    // POST-NORMALIZATION ZERO FILTER (Phase G Group B fix):
+    // Step 12's normalization (s = amt * targetTotal / rawTotal) can round
+    // small entries down to zero. The pre-normalize survivors filter (above)
+    // catches entries that were zero before normalization, but not these.
+    // If we leave them in the tree, they consume the user's claim slot
+    // (`hasClaimedUsdc` is set even for amount=0 claims) without paying out
+    // anything — a self-affecting foot-gun, see Phase H Finding 6.
+    // The filter is safe wrt INV4: dropped entries contribute zero to the
+    // sum, so the post-filter sum is still exactly targetTotal.
+    const filtered = normalized.filter(([, a]) => a > 0n);
+    const droppedZeros = normalized.length - filtered.length;
+    if (droppedZeros > 0) {
+      console.log(`  post-normalize zero filter: dropped ${droppedZeros} entries that rounded to 0`);
+    }
+    const finalsPairs = filtered;
     console.log(`  haircut vs raw: ${rawTotal - targetTotal} (${token === "USDC" ? Number(rawTotal - targetTotal) / 1e6 : Number(rawTotal - targetTotal) / 1e18} ${token})`);
 
     type FE = { address: `0x${string}`; shareWad: bigint; amount: bigint };

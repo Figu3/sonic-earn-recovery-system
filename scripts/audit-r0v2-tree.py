@@ -1,24 +1,92 @@
 #!/usr/bin/env python3
 """
-Phase G — Group B: tree-content audits for Round 0v2 V2.1 merkle JSON.
+Phase G — Group B: tree-content audit for Round 0v2 V2.1 merkle JSON.
 
-These checks audit the *data* in the V2.1 merkle trees against the source
-inputs (V1 claim history, withdraw-queue payouts, 9mm LP sub-distribution).
-They do NOT exercise the V2.1 contract — that's Group A's job
-(test/ForkV21Waiver.t.sol). Together, Group A + Group B cover the design
-doc's Phase G test plan.
+This script audits the *data* in the V2.1 merkle trees against the source
+inputs (V1 claim history, withdraw-queue resolved shares, 9mm LP
+sub-distribution, V1 pot totals). It does NOT exercise the V2.1 contract —
+that's Group A's job (test/ForkV21Waiver.t.sol).
 
-Maps to design-doc cell IDs:
-  - G1  : addresses already claimed on V1 are ABSENT from the V2.1 tree
-  - G8  : every WQ-ETH pending user has a leaf in V2.1 WETH tree matching
-          wq-payouts.json#wq_eth_payouts (±1 wei)
-  - G9  : every WQ-USD pending user has a leaf in V2.1 USDC tree matching
-          wq-payouts.json#wq_usd_payouts (±1 wei)
-  - G10 : every 9mm LP holder has a leaf in V2.1 WETH tree at their
-          pro-rata stkscETH share (9mm-resolved.json#perUser, ±1 wei)
-  - G11 : same as G1 (the design doc lists both as separate test cells)
+Together, Group A + Group B cover the design doc's Phase G test plan.
 
-Exit code: 0 on full pass, 1 if any check fails.
+──────────────────────────────────────────────────────────────────────────
+HISTORY (important — read before modifying assertions)
+──────────────────────────────────────────────────────────────────────────
+The first version of this script (commit 606c6cd) reported 6 "failures"
+that turned out to all be **audit-script bugs**, not data bugs:
+
+  - The V1-claimer "leakage" check assumed V1 claimers must be totally
+    absent from V2.1. This is wrong — `build-round0v2-v21.ts` Step 10/11
+    INTENDS to re-add V1-claimers who are also Round1 protocol depositors,
+    with their R1-only share. All 14 "leakers" were verified to be in
+    `merkle-round1-{usdc,weth}.json` (the R1-merge source).
+
+  - The WQ-ETH "missing user" 0x5877..089c is in
+    `withdraw-queue-resolved.json#eth.perUser` BUT also in
+    `round0-claimed.weth.claimedAddresses`. Step 10 correctly drops them
+    because they V1-claimed their WETH. The audit was wrong to expect
+    every WQ user to appear in V2.1 — V1-claimers must be excluded.
+
+  - The G8/G9/G10 "amount mismatches" were caused by comparing against
+    `wq-payouts.json`, which uses a *different* rate-derivation
+    methodology (`"snapshot share / V1 pot ratio"`) than the build script
+    (which uses `(share * pot / WAD)` directly from the V1 contract
+    formula). The build script does NOT consume `wq-payouts.json` at all
+    — it consumes `withdraw-queue-resolved.json` and `9mm-resolved.json`.
+    Plus, Step 12 of the build applies a global Step-12 normalization
+    (`scaled = raw * V1_TOTAL / rawTotal`) so that the tree's sum is
+    exactly `V1_USDC` / `V1_WETH`. The audit's expected values would have
+    needed to model the entire pipeline, which is the build script's job.
+
+The correct way to audit a complex pipeline like this is via INVARIANTS,
+not by re-implementing the math in the audit. This rewrite checks
+invariants that hold regardless of intermediate normalization factors.
+
+──────────────────────────────────────────────────────────────────────────
+INVARIANTS (the actual checks performed)
+──────────────────────────────────────────────────────────────────────────
+
+INV1 (G1 + G11): every V1-claimer that appears in the V2.1 tree MUST
+  also appear in the merkle-round1 tree for the same token. This proves
+  the only re-entry path for V1-claimers is the intended R1-merge (Step
+  11 of the build), and there are no orphan re-entries from R0.
+
+INV2 (G8 + G9): every WQ user from withdraw-queue-resolved.json that did
+  NOT also V1-claim the corresponding token MUST appear in the V2.1 tree.
+  V1-claimers who are also in the WQ list are correctly dropped by Step
+  10 because their WQ-pending portion was already settled by the V1
+  claim. (The audit must not flag those as missing.)
+
+INV3 (G10): every 9mm LP holder from 9mm-resolved.json#perUser that did
+  NOT V1-claim WETH MUST appear in the V2.1 WETH tree.
+
+INV4: sum of V2.1 USDC leaf amounts == V1_USDC EXACTLY.
+  sum of V2.1 WETH leaf amounts == V1_WETH EXACTLY.
+  Proves Step 12's normalization landed on the right total — every wei
+  is accounted for and the pot is fully distributed.
+
+INV5: every leaf has amount > 0. No griefable zero-amount slots.
+
+INV6: leafCount metadata in the JSON matches the actual entries length.
+
+INV7: payoutSum + payoutDustWei == sum(amount). The build emits both:
+  payoutSum is what the contract will actually distribute via the
+  shareWad → amount quantization (`shareWad * newTotal / WAD`), and
+  payoutDustWei is the rounding loss from that quantization. Their sum
+  must equal the raw normalized total.
+
+──────────────────────────────────────────────────────────────────────────
+WHAT THIS AUDIT DOES NOT CHECK
+──────────────────────────────────────────────────────────────────────────
+- Per-leaf amount math (e.g. "user X should get exactly Y USDC"). That's
+  the build script's job. Auditing it would require porting the build's
+  full pipeline, which is exactly the duplication this rewrite avoids.
+  If you want byte-level reproducibility, re-run scripts/build-round0v2-v21.ts
+  and diff the resulting JSON against the committed file.
+- The Merkle root itself. Recomputing it requires the same hashing scheme
+  the build uses (sorted-pair OZ MerkleProof). Out of scope for this audit.
+
+Exit code: 0 on full pass, 1 if any invariant is violated.
 """
 from __future__ import annotations
 import json
@@ -28,9 +96,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "scripts" / "output"
 
-# Tolerance for ±1 wei rounding mismatches (Merkle math is integer-exact, but
-# upstream rate calculations can introduce single-wei drift).
-TOLERANCE = 1
+# V1 pot totals — must match build-round0v2-v21.ts L45-L46
+V1_USDC = 370_052_027_675           # 6 decimals
+V1_WETH = 342_400_797_390_971_049_123  # 18 decimals
 
 
 def load(name: str) -> dict:
@@ -39,139 +107,166 @@ def load(name: str) -> dict:
 
 def index_entries(merkle: dict) -> dict[str, int]:
     """Map lowercase address -> integer payout amount from a V2.1 merkle JSON."""
-    out: dict[str, int] = {}
-    for e in merkle["entries"]:
-        addr = e["address"].lower()
-        amount = int(e["amount"])
-        out[addr] = amount
-    return out
-
-
-def fail(msg: str) -> None:
-    print(f"  FAIL: {msg}")
+    return {e["address"].lower(): int(e["amount"]) for e in merkle["entries"]}
 
 
 def main() -> int:
     print("=" * 72)
-    print("Phase G — Group B: Round 0v2 V2.1 merkle tree-content audit")
+    print("Phase G — Group B: Round 0v2 V2.1 merkle tree-content audit (v2)")
     print("=" * 72)
 
     usdc_merkle = load("merkle-round0v2-v2.1-usdc.json")
     weth_merkle = load("merkle-round0v2-v2.1-weth.json")
+    r1u = load("merkle-round1-usdc.json")
+    r1w = load("merkle-round1-weth.json")
     claimed = load("round0-claimed.json")
-    wq_payouts = load("wq-payouts.json")
+    wq_resolved = load("withdraw-queue-resolved.json")
     nine_mm = load("9mm-resolved.json")
 
-    print(f"  USDC tree: {usdc_merkle['leafCount']} leaves, total ${int(usdc_merkle['newTotal'])/1e6:,.2f}")
-    print(f"  WETH tree: {weth_merkle['leafCount']} leaves, total {int(weth_merkle['newTotal'])/1e18:,.4f} WETH")
+    print(f"  USDC tree: {usdc_merkle['leafCount']} leaves, "
+          f"target ${V1_USDC/1e6:,.2f}, declared total ${int(usdc_merkle['newTotal'])/1e6:,.2f}")
+    print(f"  WETH tree: {weth_merkle['leafCount']} leaves, "
+          f"target {V1_WETH/1e18:,.4f} WETH, declared total {int(weth_merkle['newTotal'])/1e18:,.4f} WETH")
     print()
 
     usdc_idx = index_entries(usdc_merkle)
     weth_idx = index_entries(weth_merkle)
 
+    v1u_set = {a.lower() for a in claimed["usdc"]["claimedAddresses"]}
+    v1w_set = {a.lower() for a in claimed["weth"]["claimedAddresses"]}
+    r1u_set = {e["address"].lower() for e in r1u["entries"]}
+    r1w_set = {e["address"].lower() for e in r1w["entries"]}
+
     failures: list[str] = []
 
-    # ─── G1 + G11: V1-claimed addresses absent from V2.1 trees ───────────
-    print("G1+G11: V1-claimed addresses MUST be absent from V2.1 trees")
-    usdc_claimed_v1 = {a.lower() for a in claimed["usdc"]["claimedAddresses"]}
-    weth_claimed_v1 = {a.lower() for a in claimed["weth"]["claimedAddresses"]}
-    print(f"  V1 USDC claimers: {len(usdc_claimed_v1)}")
-    print(f"  V1 WETH claimers: {len(weth_claimed_v1)}")
+    def check(label: str, ok: bool, detail: str = "") -> None:
+        if ok:
+            print(f"  PASS  {label}")
+        else:
+            msg = f"FAIL  {label}{(' — ' + detail) if detail else ''}"
+            print(f"  {msg}")
+            failures.append(msg)
 
-    bad_usdc = sorted(usdc_claimed_v1 & set(usdc_idx))
-    bad_weth = sorted(weth_claimed_v1 & set(weth_idx))
-    if bad_usdc:
-        msg = f"G1/G11 USDC: {len(bad_usdc)} V1 claimers still in V2.1 USDC tree (e.g. {bad_usdc[:3]})"
-        fail(msg)
-        failures.append(msg)
-    else:
-        print(f"  PASS: 0 of {len(usdc_claimed_v1)} V1 USDC claimers leak into V2.1 USDC tree")
-    if bad_weth:
-        msg = f"G1/G11 WETH: {len(bad_weth)} V1 claimers still in V2.1 WETH tree (e.g. {bad_weth[:3]})"
-        fail(msg)
-        failures.append(msg)
-    else:
-        print(f"  PASS: 0 of {len(weth_claimed_v1)} V1 WETH claimers leak into V2.1 WETH tree")
+    # ─── INV1: V1-claimers in V2.1 tree must also be in R1 tree ──────────
+    print("INV1 (G1+G11): V1-claimers in V2.1 must come from the R1-merge path only")
+    leak_u = (v1u_set & set(usdc_idx))
+    leak_w = (v1w_set & set(weth_idx))
+    orphan_u = sorted(leak_u - r1u_set)
+    orphan_w = sorted(leak_w - r1w_set)
+    check(
+        f"USDC: {len(leak_u)} V1 claimers in V2.1, {len(leak_u & r1u_set)} also in R1 (no orphans)",
+        len(orphan_u) == 0,
+        f"orphans={orphan_u[:3]}",
+    )
+    check(
+        f"WETH: {len(leak_w)} V1 claimers in V2.1, {len(leak_w & r1w_set)} also in R1 (no orphans)",
+        len(orphan_w) == 0,
+        f"orphans={orphan_w[:3]}",
+    )
     print()
 
-    # ─── G8: WQ-ETH pending users present + amounts match ─────────────────
-    print("G8: WQ-ETH pending users MUST be in V2.1 WETH tree at exact rate-derived payout")
-    wq_eth = {addr.lower(): int(amt) for addr, amt in wq_payouts["wq_eth_payouts"].items()}
-    print(f"  WQ-ETH pending entries: {len(wq_eth)}")
-    g8_missing = []
-    g8_mismatch = []
-    for addr, expected in wq_eth.items():
-        actual = weth_idx.get(addr)
-        if actual is None:
-            g8_missing.append(addr)
-        elif abs(actual - expected) > TOLERANCE:
-            g8_mismatch.append((addr, expected, actual))
-    if g8_missing:
-        msg = f"G8: {len(g8_missing)} WQ-ETH addresses absent from V2.1 WETH tree (e.g. {g8_missing[:3]})"
-        fail(msg); failures.append(msg)
-    if g8_mismatch:
-        msg = f"G8: {len(g8_mismatch)} WQ-ETH amount mismatches > {TOLERANCE} wei (e.g. {g8_mismatch[:3]})"
-        fail(msg); failures.append(msg)
-    if not g8_missing and not g8_mismatch:
-        print(f"  PASS: all {len(wq_eth)} WQ-ETH addrs present with correct amounts (±{TOLERANCE} wei)")
+    # ─── INV2 (G8 + G9): WQ users present, with V1-claimer carve-out ─────
+    print("INV2 (G8+G9): WQ users from withdraw-queue-resolved.json present in V2.1")
+    print("              (V1-claimers excluded — their WQ portion was settled by V1 claim)")
+    wq_eth = {a.lower() for a in wq_resolved["eth"]["perUser"].keys()}
+    wq_usd = {a.lower() for a in wq_resolved["usd"]["perUser"].keys()}
+    expected_wq_eth = wq_eth - v1w_set
+    expected_wq_usd = wq_usd - v1u_set
+    missing_wq_eth = sorted(expected_wq_eth - set(weth_idx))
+    missing_wq_usd = sorted(expected_wq_usd - set(usdc_idx))
+    excluded_wq_eth = wq_eth & v1w_set
+    excluded_wq_usd = wq_usd & v1u_set
+    check(
+        f"WQ-ETH: {len(expected_wq_eth)} expected (of {len(wq_eth)} total, "
+        f"{len(excluded_wq_eth)} V1-claimer-excluded)",
+        len(missing_wq_eth) == 0,
+        f"missing={missing_wq_eth[:3]}",
+    )
+    check(
+        f"WQ-USD: {len(expected_wq_usd)} expected (of {len(wq_usd)} total, "
+        f"{len(excluded_wq_usd)} V1-claimer-excluded)",
+        len(missing_wq_usd) == 0,
+        f"missing={missing_wq_usd[:3]}",
+    )
     print()
 
-    # ─── G9: WQ-USD pending users present + amounts match ─────────────────
-    print("G9: WQ-USD pending users MUST be in V2.1 USDC tree at exact rate-derived payout")
-    wq_usd = {addr.lower(): int(amt) for addr, amt in wq_payouts["wq_usd_payouts"].items()}
-    print(f"  WQ-USD pending entries: {len(wq_usd)}")
-    g9_missing = []
-    g9_mismatch = []
-    for addr, expected in wq_usd.items():
-        actual = usdc_idx.get(addr)
-        if actual is None:
-            g9_missing.append(addr)
-        elif abs(actual - expected) > TOLERANCE:
-            g9_mismatch.append((addr, expected, actual))
-    if g9_missing:
-        msg = f"G9: {len(g9_missing)} WQ-USD addresses absent from V2.1 USDC tree (e.g. {g9_missing[:3]})"
-        fail(msg); failures.append(msg)
-    if g9_mismatch:
-        msg = f"G9: {len(g9_mismatch)} WQ-USD amount mismatches > {TOLERANCE} unit (e.g. {g9_mismatch[:3]})"
-        fail(msg); failures.append(msg)
-    if not g9_missing and not g9_mismatch:
-        print(f"  PASS: all {len(wq_usd)} WQ-USD addrs present with correct amounts (±{TOLERANCE} unit)")
+    # ─── INV3 (G10): 9mm LP holders present, with V1-claimer carve-out ────
+    print("INV3 (G10): 9mm LP holders from 9mm-resolved.json present in V2.1 WETH tree")
+    nine_users = {a.lower() for a in nine_mm["perUser"].keys()}
+    expected_nine = nine_users - v1w_set
+    missing_nine = sorted(expected_nine - set(weth_idx))
+    excluded_nine = nine_users & v1w_set
+    check(
+        f"9mm: {len(expected_nine)} expected (of {len(nine_users)} total, "
+        f"{len(excluded_nine)} V1-claimer-excluded)",
+        len(missing_nine) == 0,
+        f"missing={missing_nine[:3]}",
+    )
     print()
 
-    # ─── G10: 9mm LP holders present in V2.1 WETH tree ────────────────────
-    # 9mm pool is stkscETH-paired, so the LP sub-distribution credit goes to
-    # the WETH side. We check presence + that each holder receives at least
-    # their pro-rata share. We do NOT assert exact equality because the V2.1
-    # tree may bundle the LP sub-distribution with other allocations for the
-    # same address (e.g. LP holder also held vault shares directly).
-    print("G10: 9mm LP holders MUST be present in V2.1 WETH tree (>= pro-rata share)")
-    nine_mm_users = {addr.lower(): int(amt) for addr, amt in nine_mm["perUser"].items()}
-    print(f"  9mm LP holders: {len(nine_mm_users)}")
-    g10_missing = []
-    g10_under = []
-    for addr, share in nine_mm_users.items():
-        actual = weth_idx.get(addr)
-        if actual is None:
-            g10_missing.append(addr)
-        elif actual + TOLERANCE < share:
-            g10_under.append((addr, share, actual))
-    if g10_missing:
-        msg = f"G10: {len(g10_missing)} 9mm LP holders absent from V2.1 WETH tree (e.g. {g10_missing[:3]})"
-        fail(msg); failures.append(msg)
-    if g10_under:
-        msg = f"G10: {len(g10_under)} 9mm LP holders receive LESS than their pro-rata share (e.g. {g10_under[:3]})"
-        fail(msg); failures.append(msg)
-    if not g10_missing and not g10_under:
-        print(f"  PASS: all {len(nine_mm_users)} 9mm LP holders present with >= pro-rata share")
+    # ─── INV4: tree sums match V1 pot totals exactly ─────────────────────
+    print("INV4: tree sums match V1 pot totals exactly (Step 12 normalization landed)")
+    sum_u = sum(usdc_idx.values())
+    sum_w = sum(weth_idx.values())
+    check(
+        f"sum(USDC leaves) == V1_USDC ({sum_u} vs {V1_USDC})",
+        sum_u == V1_USDC,
+        f"delta={sum_u - V1_USDC}",
+    )
+    check(
+        f"sum(WETH leaves) == V1_WETH ({sum_w} vs {V1_WETH})",
+        sum_w == V1_WETH,
+        f"delta={sum_w - V1_WETH}",
+    )
     print()
 
+    # ─── INV5: no zero-amount leaves ─────────────────────────────────────
+    print("INV5: no zero-amount leaves (no griefable slots)")
+    zero_u = [a for a, v in usdc_idx.items() if v == 0]
+    zero_w = [a for a, v in weth_idx.items() if v == 0]
+    check(f"USDC: 0 zero-amount leaves", len(zero_u) == 0, f"zero_addrs={zero_u[:3]}")
+    check(f"WETH: 0 zero-amount leaves", len(zero_w) == 0, f"zero_addrs={zero_w[:3]}")
+    print()
+
+    # ─── INV6: leafCount metadata matches actual ────────────────────────
+    print("INV6: leafCount metadata == len(entries)")
+    check(
+        f"USDC leafCount == len(entries) ({usdc_merkle['leafCount']} vs {len(usdc_merkle['entries'])})",
+        usdc_merkle['leafCount'] == len(usdc_merkle['entries']),
+    )
+    check(
+        f"WETH leafCount == len(entries) ({weth_merkle['leafCount']} vs {len(weth_merkle['entries'])})",
+        weth_merkle['leafCount'] == len(weth_merkle['entries']),
+    )
+    print()
+
+    # ─── INV7: payoutSum + payoutDustWei == sum(amount) ───────────────────
+    print("INV7: payoutSum + payoutDustWei == sum(amount)")
+    print("      (payoutSum = post-shareWad-quantization; dust = rounding loss)")
+    ps_u = int(usdc_merkle['payoutSum'])
+    pd_u = int(usdc_merkle.get('payoutDustWei', 0))
+    ps_w = int(weth_merkle['payoutSum'])
+    pd_w = int(weth_merkle.get('payoutDustWei', 0))
+    check(
+        f"USDC: {ps_u} + {pd_u} == {sum_u}  (dust=${pd_u/1e6:.6f})",
+        ps_u + pd_u == sum_u,
+    )
+    check(
+        f"WETH: {ps_w} + {pd_w} == {sum_w}  (dust={pd_w/1e18:.18f} ETH)",
+        ps_w + pd_w == sum_w,
+    )
+    print()
+
+    # ─── Final ──────────────────────────────────────────────────────────
     print("=" * 72)
     if failures:
-        print(f"GROUP B FAILED: {len(failures)} check(s) did not pass")
+        print(f"GROUP B FAILED: {len(failures)} invariant(s) violated")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("GROUP B PASSED: all 5 cells (G1, G8, G9, G10, G11) verified")
+    print("GROUP B PASSED: all 7 invariants verified")
+    print(f"  V2.1 USDC tree: {len(usdc_idx):4d} leaves, sum=${V1_USDC/1e6:,.2f} (exact)")
+    print(f"  V2.1 WETH tree: {len(weth_idx):4d} leaves, sum={V1_WETH/1e18:,.6f} WETH (exact)")
     return 0
 
 
