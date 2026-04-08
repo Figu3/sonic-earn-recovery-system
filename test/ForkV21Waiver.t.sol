@@ -48,7 +48,7 @@ contract ForkV21WaiverTest is Test {
     // ─── Real on-chain Safe targets from Phase A ─────────────────────────
     // SAFE_1 is the largest stuck threshold-1 Safe by USDC; verified on-chain
     // via `cast call <addr> "getThreshold()(uint256)"` → 1.
-    address constant SAFE_1 = 0x697f27643eEd4D13276a126a31f0e84EeFF92dE8; // 1-of-1
+    address constant SAFE_1 = 0x697F27643EEd4d13276a126a31f0E84eEFF92DE8; // 1-of-1
     address constant SAFE_2 = 0x4d62b6E166767988106cF7Ee8fE23E480E76FF1d; // 2-of-N
     address constant SAFE_3 = 0x7D1C5910C1d82A4874fAC4EDfe80eb3C2b706676; // 3-of-N
     address constant SAFE_4 = 0x6a150370626bB338e921b59e78AF991e6B416567; // 4-of-N
@@ -79,15 +79,16 @@ contract ForkV21WaiverTest is Test {
     // ─── Merkle data (built in setUp) ───────────────────────────────────
     bytes32 usdcRoot;
     bytes32 wethRoot;
-    bytes32[] leaves;            // ordered: alice, bob7702, erc1271, SAFE_2, SAFE_3, SAFE_4, spare
+    bytes32[] leaves;            // ordered: alice, bob7702, erc1271, SAFE_1, SAFE_2, SAFE_3, SAFE_4, spare
     bytes32[][] proofs;          // proofs[i] = proof for leaves[i]
     uint256 constant IDX_ALICE   = 0;
     uint256 constant IDX_BOB7702 = 1;
     uint256 constant IDX_1271    = 2;
-    uint256 constant IDX_SAFE_2  = 3;
-    uint256 constant IDX_SAFE_3  = 4;
-    uint256 constant IDX_SAFE_4  = 5;
-    uint256 constant IDX_SPARE   = 6;
+    uint256 constant IDX_SAFE_1  = 3;
+    uint256 constant IDX_SAFE_2  = 4;
+    uint256 constant IDX_SAFE_3  = 5;
+    uint256 constant IDX_SAFE_4  = 6;
+    uint256 constant IDX_SPARE   = 7;
 
     // ─── Setup ──────────────────────────────────────────────────────────
     function setUp() public {
@@ -108,10 +109,11 @@ contract ForkV21WaiverTest is Test {
 
         // Build the controlled merkle tree
         // Leaf encoding MUST match V2.1: keccak256(bytes.concat(keccak256(abi.encode(addr, shareWad))))
-        leaves = new bytes32[](7);
+        leaves = new bytes32[](8);
         leaves[IDX_ALICE]   = _leaf(aliceEoa,         SHARE_WAD);
         leaves[IDX_BOB7702] = _leaf(bob7702,          SHARE_WAD);
         leaves[IDX_1271]    = _leaf(address(erc1271), SHARE_WAD);
+        leaves[IDX_SAFE_1]  = _leaf(SAFE_1,           SHARE_WAD);
         leaves[IDX_SAFE_2]  = _leaf(SAFE_2,           SHARE_WAD);
         leaves[IDX_SAFE_3]  = _leaf(SAFE_3,           SHARE_WAD);
         leaves[IDX_SAFE_4]  = _leaf(SAFE_4,           SHARE_WAD);
@@ -121,8 +123,8 @@ contract ForkV21WaiverTest is Test {
         wethRoot = usdcRoot; // same tree for both for simplicity
 
         // Pre-compute proofs
-        proofs = new bytes32[][](7);
-        for (uint256 i = 0; i < 7; i++) {
+        proofs = new bytes32[][](8);
+        for (uint256 i = 0; i < 8; i++) {
             proofs[i] = Merkle.getProof(leaves, i);
         }
 
@@ -292,6 +294,12 @@ contract ForkV21WaiverTest is Test {
         assertTrue(v21.hasSignedWaiver(safeAddr), "safe waiver must be set");
 
         _claimAndAssert(safeAddr, leafIdx);
+    }
+
+    // ─── G3: real on-chain 1-of-1 Safe ──────────────────────────────────
+    function test_G3_safe_1of1_sign_then_claim() public {
+        _runSafeCase(SAFE_1, 1, IDX_SAFE_1);
+        emit log_string("  G3 PASS: 1-of-1 Safe variable-length bundle -> claim succeeds");
     }
 
     // ─── G4: real on-chain 2-of-N Safe ──────────────────────────────────
