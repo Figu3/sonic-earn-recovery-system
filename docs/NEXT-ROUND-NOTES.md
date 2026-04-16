@@ -51,6 +51,32 @@ Wasn't explicitly flagged by 543 but almost certainly applies the same way.
 it for USD and not ETH". Both Eliteness contracts need correction in the next
 round.
 
+### 1b-bis. Beets redirect to `0x97079F7E04B535FE7cD3f972Ce558412dFb33946` — **never implemented**
+
+Beets team apparently asked to have their LP pools' stkscUSD/stkscETH
+entitlements redirected to a 3-of-6 Safe at
+`0x97079F7E04B535FE7cD3f972Ce558412dFb33946` so they could distribute to LPs
+themselves. **This redirect does not exist in the V2.1 build script.** The
+address is not in `PROTOCOL_REDIRECTS` as a target, is not in the snapshot,
+is not in any merkle tree. They already signed the V2.1 waiver so they
+clearly expected an allocation.
+
+**Same failure pattern as the Eliteness Equalizer**: verbal/DM agreement
+during the snapshot negotiation, not encoded in the build. Need to:
+1. Identify which Beets LP pools held stkscUSD/stkscETH at snapshot block
+   63,645,527. Balancer-V2-style vault on Sonic is
+   `0xBA12222222228d8Ba445958a75a0704d566BF2C8` (confirmed has code);
+   Balancer V3 vault is `0xbA1333333333a1BA1108E8412f11850A5C319bA9`.
+   Pool contracts (not the Vault) hold the tokens in V2 semantics; in V3
+   the Vault holds everything but owes it to each pool.
+2. Confirm with Beets team which specific pool addresses should have
+   redirected (get it in writing this time).
+3. After V2.1 sweep at deadline, transfer the corresponding amount from
+   the admin Safe to `0x97079F7E…`.
+
+Without the Beets-side list of pool addresses, we can't automate this in
+the next round — ask them for the list up front.
+
 ### 1c. Unhandled protocol contracts (likely SwapX or similar) — **~$37K stuck**
 
 Contract addresses that hold V2.1 allocations but aren't in any
@@ -170,7 +196,7 @@ out NOT to be contract bugs:
 |---|---|---|
 | `0x5BC19020c5E4BBa928226e36AE5BDba782e4A216` | "can't claim USDC" | Already claimed — $6,227 is in the Safe |
 | `0x13cCDb2080483d7cf9545f496457d393994B7Da6` | "can't claim" | EOA with WQ-ETH leaf (0.2308 WETH) — needs to sign V2.1 waiver first |
-| `0x97079F7E04B535FE7cD3f972Ce558412dFb33946` | "no USDC to claim" | Not in tree — never held stkscUSD at snapshot. Confused their addresses |
+| `0x97079F7E04B535FE7cD3f972Ce558412dFb33946` | "no USDC to claim" | **Beets team Safe — redirect never implemented. Not user error. See section 1b-bis above.** |
 | `0xB0C855A7FB3716EBC1c4505218De4bF2186125Ba` | "claim not included" | Eliteness Equalizer — sub-distributed (item 1a above) |
 | `0xAF1bff74708098dB603e48aaEbEC1BBAe03Dcf11` | "not in merkle" | Actually IS in V2.1 USDC tree at $254.35 via R1 merge |
 
